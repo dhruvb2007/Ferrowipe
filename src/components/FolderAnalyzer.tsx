@@ -21,6 +21,8 @@ import {
   Info,
   MapPin,
   Disc,
+  Link2,
+  Lock,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -805,7 +807,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
 
                   {/* Name and Subfolder Badge */}
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span
                         onClick={() => item.is_dir && handleFocusAsRoot(item.path)}
                         className={`font-bold truncate transition-colors ${
@@ -818,7 +820,27 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                         {item.name}
                       </span>
 
-                      {item.is_dir && item.has_subfolders && (
+                      {item.is_junction && (
+                        <span
+                          title="Windows Junction / Reparse Point: A legacy pointer to another folder that takes 0 bytes of disk storage."
+                          className="flex items-center gap-1 text-[10px] text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded font-medium shrink-0"
+                        >
+                          <Link2 className="w-2.5 h-2.5" />
+                          <span>Junction Point</span>
+                        </span>
+                      )}
+
+                      {item.is_access_denied && (
+                        <span
+                          title="Windows System Protected folder: Access denied by system ACLs."
+                          className="flex items-center gap-1 text-[10px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.5 rounded font-medium shrink-0"
+                        >
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>Access Denied</span>
+                        </span>
+                      )}
+
+                      {item.is_dir && item.has_subfolders && !item.is_junction && (
                         <span className="text-[10px] text-slate-400 bg-slate-950/80 px-1.5 py-0.2 rounded border border-slate-800 shrink-0 font-mono">
                           {item.subfolder_count} subfolders
                         </span>
@@ -847,11 +869,31 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
 
                   {/* Formatted Size & File Count */}
                   <div className="text-right w-24">
-                    <span className="font-mono font-bold text-xs text-emerald-400 block">
-                      {formatBytes(item.size_bytes)}
-                    </span>
+                    {item.is_junction ? (
+                      <span
+                        className="font-mono font-bold text-[11px] text-amber-400 block"
+                        title="NTFS Junction Point to target directory"
+                      >
+                        0 B (Link)
+                      </span>
+                    ) : item.is_access_denied && item.size_bytes === 0 ? (
+                      <span
+                        className="font-mono font-bold text-[11px] text-rose-400 block"
+                        title="Access Denied by Windows NTFS Permissions"
+                      >
+                        Protected
+                      </span>
+                    ) : (
+                      <span className="font-mono font-bold text-xs text-emerald-400 block">
+                        {formatBytes(item.size_bytes)}
+                      </span>
+                    )}
                     <span className="text-[10px] text-slate-400 font-mono block">
-                      {item.file_count.toLocaleString()} files
+                      {item.is_junction
+                        ? 'Junction Link'
+                        : item.is_access_denied && item.size_bytes === 0
+                        ? 'Restricted'
+                        : `${item.file_count.toLocaleString()} files`}
                     </span>
                   </div>
 

@@ -82,6 +82,8 @@ export interface FolderItem {
   percentage: number;
   depth: number;
   has_subfolders: boolean;
+  is_junction: boolean;
+  is_access_denied: boolean;
 }
 
 export interface FolderAnalysisResult {

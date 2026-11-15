@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,6 +18,8 @@ use windows_sys::Win32::UI::Shell::{
 
 use crate::models::SkippedFile;
 
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderItem {
     pub id: String,
@@ -31,6 +34,8 @@ pub struct FolderItem {
     pub percentage: f64,
     pub depth: usize,
     pub has_subfolders: bool,
+    pub is_junction: bool,
+    pub is_access_denied: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,8 +74,16 @@ pub struct DeleteFoldersReport {
 fn to_double_null_wide(s: &str) -> Vec<u16> {
     let mut wide: Vec<u16> = std::ffi::OsStr::new(s).encode_wide().collect();
     wide.push(0);
-    wide.push(0); // Double null termination for SHFileOperationW
+    wide.push(0);
     wide
+}
+
+pub fn is_junction_or_symlink(path: &Path) -> bool {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        meta.file_type().is_symlink() || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+    } else {
+        false
+    }
 }
 
 pub fn is_protected_path(path: &Path) -> bool {
@@ -101,34 +114,60 @@ pub fn is_protected_path(path: &Path) -> bool {
 }
 
 /// Recursively computes directory size and file count using jwalk
-pub fn compute_directory_metrics(dir: &Path, cancel_flag: &AtomicBool) -> (u64, u64, u64) {
+pub fn compute_directory_metrics(
+    dir: &Path,
+    cancel_flag: &AtomicBool,
+) -> (u64, u64, u64, bool, bool) {
+    if is_junction_or_symlink(dir) {
+        return (0, 0, 0, true, false);
+    }
+
+    // Check read access
+    match fs::read_dir(dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return (0, 0, 0, false, true);
+        }
+        Err(_) => {}
+    }
+
     let mut total_bytes = 0u64;
     let mut file_count = 0u64;
     let mut subfolder_count = 0u64;
+    let mut is_denied = false;
 
     for entry_res in jwalk::WalkDir::new(dir).skip_hidden(false).follow_links(false) {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
 
-        if let Ok(entry) = entry_res {
-            if entry.depth == 0 {
-                continue;
-            }
+        match entry_res {
+            Ok(entry) => {
+                if entry.depth == 0 {
+                    continue;
+                }
 
-            let file_type = entry.file_type();
-            if file_type.is_dir() {
-                subfolder_count += 1;
-            } else if file_type.is_file() {
-                file_count += 1;
-                if let Ok(meta) = entry.metadata() {
-                    total_bytes += meta.len();
+                let file_type = entry.file_type();
+                if file_type.is_dir() {
+                    subfolder_count += 1;
+                } else if file_type.is_file() {
+                    file_count += 1;
+                    if let Ok(meta) = entry.metadata() {
+                        total_bytes += meta.len();
+                    }
+                }
+            }
+            Err(e) => {
+                if let Some(io_err) = e.io_error() {
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied {
+                        is_denied = true;
+                    }
                 }
             }
         }
     }
 
-    (total_bytes, file_count, subfolder_count)
+    (total_bytes, file_count, subfolder_count, false, is_denied)
 }
 
 /// Analyzes immediate children of `target_path` in parallel, returning FolderItems
@@ -192,7 +231,7 @@ pub fn analyze_directory(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| dir_path.to_string_lossy().to_string());
 
-            let (size_bytes, file_count, subfolder_count) =
+            let (size_bytes, file_count, subfolder_count, is_junction, is_access_denied) =
                 compute_directory_metrics(&dir_path, &cancel_flag_clone);
 
             total_bytes_clone.fetch_add(size_bytes, Ordering::Relaxed);
@@ -234,6 +273,8 @@ pub fn analyze_directory(
                 percentage: 0.0,
                 depth,
                 has_subfolders: subfolder_count > 0,
+                is_junction,
+                is_access_denied,
             })
         })
         .collect();
@@ -273,6 +314,8 @@ pub fn analyze_directory(
                 percentage: 0.0,
                 depth,
                 has_subfolders: false,
+                is_junction: false,
+                is_access_denied: false,
             });
         }
     }
@@ -321,6 +364,8 @@ struct RawDirNode {
     total_files: u64,
     subfolder_count: u64,
     last_modified: Option<u64>,
+    is_junction: bool,
+    is_access_denied: bool,
 }
 
 /// High-speed Full Disk Analysis: walks the entire drive, aggregates sizes bottom-up,
@@ -359,6 +404,8 @@ pub fn analyze_full_disk_tree(
             total_files: 0,
             subfolder_count: 0,
             last_modified: None,
+            is_junction: false,
+            is_access_denied: false,
         },
     );
 
@@ -371,79 +418,139 @@ pub fn analyze_full_disk_tree(
             return Err("Full disk analysis canceled by user".to_string());
         }
 
-        if let Ok(entry) = entry_res {
-            if entry.depth == 0 {
-                continue;
-            }
+        match entry_res {
+            Ok(entry) => {
+                if entry.depth == 0 {
+                    continue;
+                }
 
-            let path = entry.path();
-            let file_type = entry.file_type();
+                let path = entry.path();
+                let file_type = entry.file_type();
 
-            if file_type.is_dir() {
-                scanned_folders.fetch_add(1, Ordering::Relaxed);
-                let path_norm = normalize_path_str(&path.to_string_lossy());
-                let parent_norm = path
-                    .parent()
-                    .map(|p| normalize_path_str(&p.to_string_lossy()));
+                if file_type.is_dir() {
+                    scanned_folders.fetch_add(1, Ordering::Relaxed);
+                    let path_norm = normalize_path_str(&path.to_string_lossy());
+                    let parent_norm = path
+                        .parent()
+                        .map(|p| normalize_path_str(&p.to_string_lossy()));
 
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.to_string_lossy().to_string());
 
-                let last_mod = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs());
+                    let last_mod = entry
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
 
-                raw_nodes.insert(
-                    path_norm.clone(),
-                    RawDirNode {
-                        path: path.clone(),
-                        name,
-                        parent_path: parent_norm,
-                        direct_bytes: 0,
-                        direct_files: 0,
-                        total_bytes: 0,
-                        total_files: 0,
-                        subfolder_count: 0,
-                        last_modified: last_mod,
-                    },
-                );
-            } else if file_type.is_file() {
-                scanned_files.fetch_add(1, Ordering::Relaxed);
-                if let Ok(meta) = entry.metadata() {
-                    let size = meta.len();
+                    let is_junc = is_junction_or_symlink(&path);
+
+                    // Ensure directory node exists and update its fields
+                    let dir_node = raw_nodes.entry(path_norm.clone()).or_insert_with(|| {
+                        RawDirNode {
+                            path: path.clone(),
+                            name: name.clone(),
+                            parent_path: parent_norm.clone(),
+                            direct_bytes: 0,
+                            direct_files: 0,
+                            total_bytes: 0,
+                            total_files: 0,
+                            subfolder_count: 0,
+                            last_modified: last_mod,
+                            is_junction: is_junc,
+                            is_access_denied: false,
+                        }
+                    });
+                    dir_node.path = path.clone();
+                    dir_node.name = name;
+                    dir_node.parent_path = parent_norm;
+                    if dir_node.last_modified.is_none() {
+                        dir_node.last_modified = last_mod;
+                    }
+                    dir_node.is_junction = is_junc;
+                } else if file_type.is_file() {
+                    scanned_files.fetch_add(1, Ordering::Relaxed);
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     scanned_bytes.fetch_add(size, Ordering::Relaxed);
 
                     if let Some(parent) = path.parent() {
                         let parent_norm = normalize_path_str(&parent.to_string_lossy());
-                        if let Some(parent_node) = raw_nodes.get_mut(&parent_norm) {
-                            parent_node.direct_bytes += size;
-                            parent_node.direct_files += 1;
-                        }
+                        // Ensure parent node exists so NO file size is ever dropped!
+                        let parent_node = raw_nodes.entry(parent_norm.clone()).or_insert_with(|| {
+                            let parent_name = parent
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| parent_norm.clone());
+                            let grand_parent_norm = parent
+                                .parent()
+                                .map(|p| normalize_path_str(&p.to_string_lossy()));
+                            RawDirNode {
+                                path: parent.to_path_buf(),
+                                name: parent_name,
+                                parent_path: grand_parent_norm,
+                                direct_bytes: 0,
+                                direct_files: 0,
+                                total_bytes: 0,
+                                total_files: 0,
+                                subfolder_count: 0,
+                                last_modified: None,
+                                is_junction: false,
+                                is_access_denied: false,
+                            }
+                        });
+                        parent_node.direct_bytes += size;
+                        parent_node.direct_files += 1;
+                    }
+                }
+
+                // Throttled progress emit
+                if let Ok(mut last) = last_emit.lock() {
+                    if last.elapsed() >= Duration::from_millis(60) {
+                        *last = Instant::now();
+                        let _ = app.emit(
+                            "analyze:progress",
+                            AnalyzeProgress {
+                                current_folder: path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default(),
+                                folders_scanned: scanned_folders.load(Ordering::Relaxed),
+                                files_scanned: scanned_files.load(Ordering::Relaxed),
+                                bytes_scanned: scanned_bytes.load(Ordering::Relaxed),
+                            },
+                        );
                     }
                 }
             }
+            Err(e) => {
+                // If a top-level directory has permission denied (e.g. System Volume Information)
+                if let Some(io_err) = e.io_error() {
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied {
+                        if let Some(p) = e.path() {
+                            let p_norm = normalize_path_str(&p.to_string_lossy());
+                            let p_parent = p.parent().map(|par| normalize_path_str(&par.to_string_lossy()));
+                            let p_name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p_norm.clone());
 
-            // Throttled progress emit
-            if let Ok(mut last) = last_emit.lock() {
-                if last.elapsed() >= Duration::from_millis(60) {
-                    *last = Instant::now();
-                    let _ = app.emit(
-                        "analyze:progress",
-                        AnalyzeProgress {
-                            current_folder: path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default(),
-                            folders_scanned: scanned_folders.load(Ordering::Relaxed),
-                            files_scanned: scanned_files.load(Ordering::Relaxed),
-                            bytes_scanned: scanned_bytes.load(Ordering::Relaxed),
-                        },
-                    );
+                            raw_nodes.entry(p_norm).or_insert_with(|| {
+                                RawDirNode {
+                                    path: p.to_path_buf(),
+                                    name: p_name,
+                                    parent_path: p_parent,
+                                    direct_bytes: 0,
+                                    direct_files: 0,
+                                    total_bytes: 0,
+                                    total_files: 0,
+                                    subfolder_count: 0,
+                                    last_modified: None,
+                                    is_junction: false,
+                                    is_access_denied: true,
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -506,6 +613,8 @@ pub fn analyze_full_disk_tree(
                 percentage: pct,
                 depth,
                 has_subfolders: node.subfolder_count > 0,
+                is_junction: node.is_junction,
+                is_access_denied: node.is_access_denied,
             };
 
             new_cache
@@ -581,7 +690,13 @@ pub fn get_subfolder_children(
 }
 
 fn normalize_path_str(s: &str) -> String {
-    s.replace('/', "\\").trim_end_matches('\\').to_uppercase()
+    let clean = s.replace('/', "\\").to_uppercase();
+    let trimmed = clean.trim_end_matches('\\');
+    if trimmed.ends_with(':') {
+        trimmed.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Deep scan: Finds the largest directories across the entire target tree
@@ -633,7 +748,8 @@ pub fn scan_deep_largest_folders(
                 return None;
             }
 
-            let (size, files, subfolders) = compute_directory_metrics(&dir_path, &cancel_clone);
+            let (size, files, subfolders, is_junction, is_access_denied) =
+                compute_directory_metrics(&dir_path, &cancel_clone);
             scanned_clone.fetch_add(1, Ordering::Relaxed);
 
             if let Ok(mut last) = last_emit_clone.lock() {
@@ -681,6 +797,8 @@ pub fn scan_deep_largest_folders(
                     percentage: 0.0,
                     depth: 0,
                     has_subfolders: subfolders > 0,
+                    is_junction,
+                    is_access_denied,
                 })
             } else {
                 None
@@ -733,7 +851,7 @@ pub fn execute_delete_folders(
 
         // Measure size before deleting
         let item_size = if path.is_dir() {
-            let (bytes, _, _) = compute_directory_metrics(&path, &cancel_flag);
+            let (bytes, _, _, _, _) = compute_directory_metrics(&path, &cancel_flag);
             bytes
         } else {
             path.metadata().map(|m| m.len()).unwrap_or(0)
@@ -807,5 +925,15 @@ mod tests {
         assert!(is_protected_path(Path::new("C:\\Program Files")));
         assert!(!is_protected_path(Path::new("C:\\Users\\dhruv\\Downloads")));
         assert!(!is_protected_path(Path::new("D:\\Projects\\Ferrowipe")));
+    }
+
+    #[test]
+    fn test_junction_detection() {
+        let p = Path::new("C:\\Users\\All Users");
+        if p.exists() {
+            let is_junc = is_junction_or_symlink(p);
+            println!("C:\\Users\\All Users is junction: {}", is_junc);
+            assert!(is_junc);
+        }
     }
 }
