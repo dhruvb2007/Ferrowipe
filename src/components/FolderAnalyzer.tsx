@@ -6,6 +6,7 @@ import {
   Search,
   Trash2,
   ChevronRight,
+  ChevronDown,
   RefreshCw,
   XCircle,
   FolderTree,
@@ -18,6 +19,8 @@ import {
   Home,
   HardDrive,
   Info,
+  MapPin,
+  Disc,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -53,8 +56,14 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
   const [progress, setProgress] = useState<AnalyzeProgress | null>(null);
   const [analysisResult, setAnalysisResult] = useState<FolderAnalysisResult | null>(null);
 
+  // Root tree items and expanded child items map: parent_path -> child FolderItems
+  const [treeItems, setTreeItems] = useState<FolderItem[]>([]);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [childrenMap, setChildrenMap] = useState<Map<string, FolderItem[]>>(new Map());
+  const [loadingChildPath, setLoadingChildPath] = useState<string | null>(null);
+
   // Deep Scan / View Mode
-  const [viewMode, setViewMode] = useState<'explorer' | 'deep_scan'>('explorer');
+  const [viewMode, setViewMode] = useState<'tree' | 'deep_scan'>('tree');
   const [deepScanResults, setDeepScanResults] = useState<FolderItem[]>([]);
 
   // Selection
@@ -68,6 +77,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
   // Modals & Reports
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteReport, setDeleteReport] = useState<DeleteFoldersReport | null>(null);
+  const [locateNotice, setLocateNotice] = useState<string | null>(null);
 
   // Listen to Tauri progress events
   useEffect(() => {
@@ -86,22 +96,26 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
     };
   }, []);
 
-  // Run Level Analysis (Explorer View)
+  // Run Level Analysis (Fast immediate scan of currentPath)
   const runLevelAnalysis = useCallback(async (targetPath: string) => {
     setIsAnalyzing(true);
     setProgress({
-      current_folder: 'Scanning immediate folders...',
+      current_folder: 'Scanning folders...',
       folders_scanned: 0,
       files_scanned: 0,
       bytes_scanned: 0,
     });
     setSelectedItemIds(new Set());
+    setExpandedPaths(new Set());
+    setChildrenMap(new Map());
 
     try {
       const result = await invoke<FolderAnalysisResult>('analyze_folder', {
         targetPath,
+        depth: 0,
       });
       setAnalysisResult(result);
+      setTreeItems(result.items);
       setCurrentPath(result.target_path);
       setPathInput(result.target_path);
     } catch (err) {
@@ -112,11 +126,40 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
     }
   }, []);
 
-  // Run Deep Scan (Space Hogs)
+  // Run Full Disk Analysis (Comprehensive disk scan with instant hierarchical tree)
+  const runFullDiskAnalysis = useCallback(async (diskRoot: string) => {
+    setIsAnalyzing(true);
+    setProgress({
+      current_folder: `Initiating full disk analysis for ${diskRoot}...`,
+      folders_scanned: 0,
+      files_scanned: 0,
+      bytes_scanned: 0,
+    });
+    setSelectedItemIds(new Set());
+    setExpandedPaths(new Set());
+    setChildrenMap(new Map());
+
+    try {
+      const result = await invoke<FolderAnalysisResult>('analyze_full_disk', {
+        diskRoot,
+      });
+      setAnalysisResult(result);
+      setTreeItems(result.items);
+      setCurrentPath(result.target_path);
+      setPathInput(result.target_path);
+    } catch (err) {
+      console.error('Full disk analysis failed:', err);
+      alert(`Full disk analysis error: ${err}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, []);
+
+  // Run Deep Scan (Top Space Hogs)
   const runDeepScan = useCallback(async (targetPath: string, minMb = 100) => {
     setIsAnalyzing(true);
     setProgress({
-      current_folder: 'Deep-scanning folder hierarchy...',
+      current_folder: 'Deep-scanning disk hierarchy...',
       folders_scanned: 0,
       files_scanned: 0,
       bytes_scanned: 0,
@@ -140,7 +183,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
 
   // Initial load
   useEffect(() => {
-    if (viewMode === 'explorer') {
+    if (viewMode === 'tree') {
       runLevelAnalysis(currentPath);
     } else {
       runDeepScan(currentPath, minSizeMb);
@@ -156,7 +199,90 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
     }
   };
 
-  // Breadcrumbs generator
+  // Toggle tree expansion for a folder
+  const handleToggleExpand = async (item: FolderItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!item.is_dir || !item.has_subfolders) return;
+
+    const isExpanded = expandedPaths.has(item.path);
+
+    if (isExpanded) {
+      // Collapse
+      setExpandedPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(item.path);
+        return next;
+      });
+    } else {
+      // Expand: fetch children if not already loaded
+      if (!childrenMap.has(item.path)) {
+        setLoadingChildPath(item.path);
+        try {
+          const children = await invoke<FolderItem[]>('get_folder_children', {
+            folderPath: item.path,
+            depth: item.depth + 1,
+          });
+
+          setChildrenMap((prev) => {
+            const next = new Map(prev);
+            next.set(item.path, children);
+            return next;
+          });
+        } catch (err) {
+          console.error('Failed to get subfolders:', err);
+        } finally {
+          setLoadingChildPath(null);
+        }
+      }
+
+      setExpandedPaths((prev) => {
+        const next = new Set(prev);
+        next.add(item.path);
+        return next;
+      });
+    }
+  };
+
+  // Locate folder in Windows File Explorer (opens Explorer with this item highlighted!)
+  const handleLocateInExplorer = async (path: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      await invoke('locate_in_explorer', { path });
+      setLocateNotice(`Located in Windows File Explorer: ${path}`);
+      setTimeout(() => setLocateNotice(null), 3500);
+    } catch (err) {
+      console.error('Failed to locate in explorer:', err);
+      // Fallback to open
+      await invoke('open_in_explorer', { path });
+    }
+  };
+
+  // Open inside folder in Windows Explorer
+  const handleOpenFolder = async (path: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      await invoke('open_in_explorer', { path });
+    } catch (err) {
+      console.error('Failed to open explorer:', err);
+    }
+  };
+
+  // Drill down into folder as new root
+  const handleFocusAsRoot = (path: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    runLevelAnalysis(path);
+  };
+
+  // Navigate to parent folder
+  const handleNavigateUp = () => {
+    const lastSlash = currentPath.replace(/\\$/, '').lastIndexOf('\\');
+    if (lastSlash >= 0) {
+      const parent = currentPath.substring(0, lastSlash + 1);
+      runLevelAnalysis(parent);
+    }
+  };
+
+  // Breadcrumbs
   const breadcrumbs = useMemo(() => {
     const parts = currentPath.split(/[/\\]+/).filter(Boolean);
     if (parts.length === 0) return [{ label: currentPath, path: currentPath }];
@@ -175,57 +301,42 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
     return crumbs;
   }, [currentPath]);
 
-  // Navigate to child folder
-  const handleDrillDown = (item: FolderItem) => {
-    if (item.is_dir) {
-      runLevelAnalysis(item.path);
-    }
-  };
+  // Flattens the hierarchical tree items for rendering based on expandedPaths
+  const flattenedTreeItems = useMemo(() => {
+    if (viewMode === 'deep_scan') return deepScanResults;
 
-  // Navigate to parent folder
-  const handleNavigateUp = () => {
-    const lastSlash = currentPath.replace(/\\$/, '').lastIndexOf('\\');
-    if (lastSlash >= 0) {
-      const parent = currentPath.substring(0, lastSlash + 1);
-      runLevelAnalysis(parent);
-    }
-  };
+    const result: FolderItem[] = [];
 
-  // Quick Preset Locations
-  const handleSelectPreset = (path: string) => {
-    setCurrentPath(path);
-    setPathInput(path);
-  };
-
-  // Open in Windows Explorer
-  const handleOpenExplorer = async (path: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      await invoke('open_in_explorer', { path });
-    } catch (err) {
-      console.error('Failed to open explorer:', err);
-    }
-  };
-
-  // Filter & Sort Items
-  const displayedItems = useMemo(() => {
-    const rawItems = viewMode === 'explorer' ? analysisResult?.items || [] : deepScanResults;
-
-    return rawItems
-      .filter((item) => {
-        if (minSizeMb > 0 && item.size_bytes < minSizeMb * 1024 * 1024) return false;
-        if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase()))
-          return false;
-        return true;
-      })
-      .sort((a, b) => {
+    const appendItems = (items: FolderItem[]) => {
+      // Sort items
+      const sorted = [...items].sort((a, b) => {
         if (sortBy === 'size_desc') return b.size_bytes - a.size_bytes;
         if (sortBy === 'size_asc') return a.size_bytes - b.size_bytes;
         if (sortBy === 'files_desc') return b.file_count - a.file_count;
         if (sortBy === 'name_asc') return a.name.localeCompare(b.name);
         return 0;
       });
-  }, [analysisResult, deepScanResults, viewMode, minSizeMb, searchQuery, sortBy]);
+
+      for (const item of sorted) {
+        // Apply min size & search filter
+        if (minSizeMb > 0 && item.size_bytes < minSizeMb * 1024 * 1024) continue;
+        if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) continue;
+
+        result.push(item);
+
+        // If expanded, recursively append child items
+        if (item.is_dir && expandedPaths.has(item.path)) {
+          const children = childrenMap.get(item.path);
+          if (children && children.length > 0) {
+            appendItems(children);
+          }
+        }
+      }
+    };
+
+    appendItems(treeItems);
+    return result;
+  }, [treeItems, expandedPaths, childrenMap, viewMode, deepScanResults, minSizeMb, searchQuery, sortBy]);
 
   // Selection handlers
   const toggleItemSelect = (id: string, e: React.MouseEvent) => {
@@ -239,16 +350,16 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
   };
 
   const toggleSelectAll = () => {
-    if (selectedItemIds.size === displayedItems.length) {
+    if (selectedItemIds.size === flattenedTreeItems.length) {
       setSelectedItemIds(new Set());
     } else {
-      setSelectedItemIds(new Set(displayedItems.map((it) => it.id)));
+      setSelectedItemIds(new Set(flattenedTreeItems.map((it) => it.id)));
     }
   };
 
   const selectedFolders = useMemo(() => {
-    return displayedItems.filter((it) => selectedItemIds.has(it.id));
-  }, [displayedItems, selectedItemIds]);
+    return flattenedTreeItems.filter((it) => selectedItemIds.has(it.id));
+  }, [flattenedTreeItems, selectedItemIds]);
 
   const selectedTotalBytes = useMemo(() => {
     return selectedFolders.reduce((sum, f) => sum + f.size_bytes, 0);
@@ -269,11 +380,9 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
       setDeleteReport(report);
       setSelectedItemIds(new Set());
 
-      // Refresh drive overview
       if (onRefreshDrives) onRefreshDrives();
 
-      // Refresh current view
-      if (viewMode === 'explorer') {
+      if (viewMode === 'tree') {
         runLevelAnalysis(currentPath);
       } else {
         runDeepScan(currentPath, minSizeMb);
@@ -298,7 +407,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
 
       {/* Top Controls Bar */}
       <div className="border-b border-slate-800 bg-surface-900/80 p-5 space-y-4">
-        {/* Row 1: Path Input & Presets */}
+        {/* Row 1: Path Input, Analyze Full Disk, and Drive Selectors */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-1 min-w-[320px]">
             <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-700/80 rounded-xl px-3 py-2 flex-1 focus-within:border-emerald-500 transition-colors">
@@ -312,26 +421,37 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                     setCurrentPath(pathInput);
                   }
                 }}
-                placeholder="Enter path (e.g. C:\, D:\Projects, C:\Users)..."
+                placeholder="Enter drive or folder path (e.g. C:\, D:\)..."
                 className="bg-transparent text-xs text-white placeholder-slate-500 outline-none w-full font-mono"
               />
             </div>
             <button
-              onClick={() => setCurrentPath(pathInput)}
+              onClick={() => runLevelAnalysis(pathInput)}
               disabled={isAnalyzing}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-all shrink-0 disabled:opacity-50"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl border border-slate-700 shadow-sm transition-all shrink-0 disabled:opacity-50"
             >
-              Analyze
+              Analyze Folder
+            </button>
+            <button
+              onClick={() => runFullDiskAnalysis(currentPath.includes(':') ? `${currentPath.split(':')[0]}:\\` : currentPath)}
+              disabled={isAnalyzing}
+              className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-950/50 transition-all shrink-0 disabled:opacity-50"
+            >
+              <Disc className="w-3.5 h-3.5" />
+              Analyze Full Disk
             </button>
           </div>
 
-          {/* Quick Drive Presets */}
+          {/* Quick Drive Selectors */}
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-[11px] text-slate-400 font-medium mr-1">Drives:</span>
             {drives.map((d) => (
               <button
                 key={d.mount_point}
-                onClick={() => handleSelectPreset(d.mount_point)}
+                onClick={() => {
+                  setCurrentPath(d.mount_point);
+                  setPathInput(d.mount_point);
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all border ${
                   currentPath.startsWith(d.mount_point)
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
@@ -344,7 +464,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
           </div>
         </div>
 
-        {/* Row 2: Breadcrumbs & View Mode */}
+        {/* Row 2: Breadcrumbs & View Mode Toggle */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           {/* Breadcrumbs Navigation */}
           <div className="flex items-center gap-1 overflow-x-auto text-xs py-1 max-w-full">
@@ -356,9 +476,13 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
               <ArrowUp className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => handleSelectPreset('C:\\')}
+              onClick={() => {
+                const root = currentPath.includes(':') ? `${currentPath.split(':')[0]}:\\` : 'C:\\';
+                setCurrentPath(root);
+                setPathInput(root);
+              }}
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-              title="Root C:\"
+              title="Drive Root"
             >
               <Home className="w-3.5 h-3.5" />
             </button>
@@ -384,15 +508,15 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
           {/* View Mode Toggle */}
           <div className="flex items-center gap-2 bg-slate-950/80 p-1 border border-slate-800 rounded-xl shrink-0">
             <button
-              onClick={() => setViewMode('explorer')}
+              onClick={() => setViewMode('tree')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                viewMode === 'explorer'
+                viewMode === 'tree'
                   ? 'bg-slate-800 text-emerald-400 border border-slate-700/60 shadow-sm'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <FolderTree className="w-3.5 h-3.5" />
-              Folder Level
+              Folder Tree View
             </button>
             <button
               onClick={() => setViewMode('deep_scan')}
@@ -450,7 +574,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter by name..."
+              placeholder="Search folders..."
               className="bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1 text-slate-200 placeholder-slate-500 outline-none w-36 focus:border-slate-700"
             />
           </div>
@@ -470,7 +594,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
               onClick={toggleSelectAll}
               className="text-slate-400 hover:text-white transition-colors"
             >
-              {selectedItemIds.size === displayedItems.length && displayedItems.length > 0
+              {selectedItemIds.size === flattenedTreeItems.length && flattenedTreeItems.length > 0
                 ? 'Deselect All'
                 : 'Select All'}
             </button>
@@ -497,12 +621,12 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                 <RefreshCw className="w-5 h-5 text-emerald-400 animate-spin" />
                 <div>
                   <h4 className="text-xs font-bold text-white">
-                    {viewMode === 'explorer'
-                      ? 'Analyzing Directory Hierarchy...'
-                      : 'Scanning Disk for Space Hogs...'}
+                    {analysisResult?.is_full_disk
+                      ? 'Analyzing Full Disk Storage & Building Folder Tree...'
+                      : 'Scanning Folder Hierarchy...'}
                   </h4>
                   <p className="text-[11px] text-slate-400">
-                    Traversing NTFS structures across CPU worker threads
+                    Traversing NTFS structures across multi-core CPU worker threads
                   </p>
                 </div>
               </div>
@@ -526,9 +650,26 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
               </span>
               <span className="text-emerald-400 font-semibold shrink-0">
                 {formatBytes(progress?.bytes_scanned || 0)} (
-                {(progress?.files_scanned || 0).toLocaleString()} files)
+                {(progress?.files_scanned || 0).toLocaleString()} files,{' '}
+                {(progress?.folders_scanned || 0).toLocaleString()} folders)
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Locate Notice Alert */}
+        {locateNotice && (
+          <div className="p-3.5 rounded-xl bg-cyan-950/60 border border-cyan-800/60 text-cyan-200 text-xs flex items-center justify-between animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="font-mono truncate">{locateNotice}</span>
+            </div>
+            <button
+              onClick={() => setLocateNotice(null)}
+              className="text-slate-400 hover:text-white ml-2 text-xs"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -537,7 +678,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
           <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-800/60 text-xs flex items-center justify-between animate-in fade-in">
             <div className="space-y-0.5">
               <p className="font-bold text-emerald-300">
-                Cleaned {deleteReport.deleted_paths.length} folder(s) • Freed{' '}
+                Cleaned {deleteReport.deleted_paths.length} item(s) • Freed{' '}
                 {formatBytes(deleteReport.freed_bytes)}!
               </p>
               {deleteReport.failed_paths.length > 0 && (
@@ -555,17 +696,24 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
           </div>
         )}
 
-        {/* Directory Summary Card (Explorer Mode) */}
-        {analysisResult && viewMode === 'explorer' && (
+        {/* Directory Summary Card */}
+        {analysisResult && (
           <div className="p-4 rounded-xl bg-slate-900/40 border border-slate-800 flex items-center justify-between text-xs">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
                 <HardDrive className="w-4 h-4" />
               </div>
               <div>
-                <p className="font-bold text-white font-mono">{analysisResult.target_path}</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-white font-mono">{analysisResult.target_path}</p>
+                  {analysisResult.is_full_disk && (
+                    <span className="px-2 py-0.5 text-[10px] bg-emerald-500/20 text-emerald-400 rounded-full font-bold">
+                      Full Disk Indexed
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Contains {analysisResult.total_folders.toLocaleString()} subfolders,{' '}
+                  Contains {analysisResult.total_folders.toLocaleString()} folders,{' '}
                   {analysisResult.total_files.toLocaleString()} files (Analyzed in{' '}
                   {analysisResult.duration_ms}ms)
                 </p>
@@ -574,7 +722,7 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
 
             <div className="text-right">
               <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                Total Size
+                Total Accounted Size
               </span>
               <p className="text-lg font-black text-emerald-400 font-mono">
                 {formatBytes(analysisResult.total_bytes)}
@@ -584,34 +732,56 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
         )}
 
         {/* Empty State */}
-        {!isAnalyzing && displayedItems.length === 0 && (
+        {!isAnalyzing && flattenedTreeItems.length === 0 && (
           <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-800 text-slate-400 space-y-2">
             <Info className="w-8 h-8 text-slate-500 mx-auto" />
             <p className="font-bold text-white text-sm">No folders matched your filter</p>
-            <p className="text-xs">Try lowering the minimum size filter or changing search query.</p>
+            <p className="text-xs">Try lowering the minimum size filter or search query.</p>
           </div>
         )}
 
-        {/* Folders & Files Table List */}
+        {/* Expandable Hierarchical Tree Table */}
         <div className="border border-slate-800 rounded-xl overflow-hidden bg-surface-900/70 divide-y divide-slate-800/80">
-          {displayedItems.map((item) => {
+          {flattenedTreeItems.map((item) => {
             const isSelected = selectedItemIds.has(item.id);
+            const isExpanded = expandedPaths.has(item.path);
+            const isLoadingThis = loadingChildPath === item.path;
 
             return (
               <div
                 key={item.id}
-                onClick={() => handleDrillDown(item)}
-                className={`p-3.5 flex items-center justify-between text-xs transition-colors cursor-pointer select-none ${
+                className={`p-3 flex items-center justify-between text-xs transition-colors select-none ${
                   isSelected
-                    ? 'bg-slate-800/70 border-l-2 border-emerald-500'
+                    ? 'bg-slate-800/80 border-l-2 border-emerald-500'
                     : 'hover:bg-slate-800/40'
                 }`}
+                style={{ paddingLeft: `${Math.max(item.depth * 22, 12)}px` }}
               >
-                {/* Checkbox & Name */}
-                <div className="flex items-center gap-3 flex-1 min-w-0 pr-4">
+                {/* Left Area: Expand Chevron, Checkbox, Icon, Name */}
+                <div className="flex items-center gap-2.5 flex-1 min-w-0 pr-4">
+                  {/* Expand Chevron (if folder has subfolders) */}
+                  {item.is_dir && item.has_subfolders ? (
+                    <button
+                      onClick={(e) => handleToggleExpand(item, e)}
+                      title={isExpanded ? 'Collapse subfolders' : 'Expand subfolders'}
+                      className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors shrink-0"
+                    >
+                      {isLoadingThis ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                      ) : isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  ) : (
+                    <div className="w-5.5 shrink-0" />
+                  )}
+
+                  {/* Checkbox */}
                   <button
                     onClick={(e) => toggleItemSelect(item.id, e)}
-                    className="text-slate-400 hover:text-white"
+                    className="text-slate-400 hover:text-white shrink-0"
                   >
                     {isSelected ? (
                       <CheckSquare className="w-4 h-4 text-emerald-400" />
@@ -620,21 +790,36 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                     )}
                   </button>
 
-                  <div className="p-2 rounded-lg bg-slate-950/80 border border-slate-800 shrink-0">
+                  {/* Icon */}
+                  <div className="p-1.5 rounded-lg bg-slate-950/80 border border-slate-800 shrink-0">
                     {item.is_dir ? (
-                      <Folder className="w-4 h-4 text-amber-400" />
+                      isExpanded ? (
+                        <FolderOpen className="w-4 h-4 text-amber-300" />
+                      ) : (
+                        <Folder className="w-4 h-4 text-amber-400" />
+                      )
                     ) : (
                       <File className="w-4 h-4 text-cyan-400" />
                     )}
                   </div>
 
+                  {/* Name and Subfolder Badge */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-200 truncate hover:text-emerald-400 transition-colors">
+                      <span
+                        onClick={() => item.is_dir && handleFocusAsRoot(item.path)}
+                        className={`font-bold truncate transition-colors ${
+                          item.is_dir
+                            ? 'text-slate-200 hover:text-emerald-400 cursor-pointer'
+                            : 'text-slate-300'
+                        }`}
+                        title={item.path}
+                      >
                         {item.name}
                       </span>
-                      {item.is_dir && (
-                        <span className="text-[10px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 shrink-0">
+
+                      {item.is_dir && item.has_subfolders && (
+                        <span className="text-[10px] text-slate-400 bg-slate-950/80 px-1.5 py-0.2 rounded border border-slate-800 shrink-0 font-mono">
                           {item.subfolder_count} subfolders
                         </span>
                       )}
@@ -645,24 +830,24 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                   </div>
                 </div>
 
-                {/* Percentage Bar & Space Metrics */}
-                <div className="flex items-center gap-6 shrink-0">
+                {/* Right Area: Proportional Bar, Size Badge, Files Count, Locate Button */}
+                <div className="flex items-center gap-4 shrink-0">
                   {/* Proportional Size Bar */}
-                  <div className="w-28 space-y-1 hidden sm:block">
+                  <div className="w-24 space-y-0.5 hidden sm:block">
                     <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full"
                         style={{ width: `${Math.min(item.percentage, 100)}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-slate-400 font-mono block text-right">
+                    <span className="text-[9px] text-slate-400 font-mono block text-right">
                       {item.percentage}%
                     </span>
                   </div>
 
-                  {/* Size & Files Count */}
+                  {/* Formatted Size & File Count */}
                   <div className="text-right w-24">
-                    <span className="font-mono font-bold text-sm text-emerald-400 block">
+                    <span className="font-mono font-bold text-xs text-emerald-400 block">
                       {formatBytes(item.size_bytes)}
                     </span>
                     <span className="text-[10px] text-slate-400 font-mono block">
@@ -670,14 +855,25 @@ export const FolderAnalyzer: React.FC<FolderAnalyzerProps> = ({
                     </span>
                   </div>
 
-                  {/* Open in Explorer Button */}
-                  <button
-                    onClick={(e) => handleOpenExplorer(item.path, e)}
-                    title="Open in Windows Explorer"
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-                  >
-                    <FolderOpen className="w-4 h-4" />
-                  </button>
+                  {/* Action: Locate in Explorer */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={(e) => handleLocateInExplorer(item.path, e)}
+                      title="Locate in Windows Explorer (selects folder)"
+                      className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-cyan-300 hover:text-white bg-cyan-950/40 hover:bg-cyan-900/60 border border-cyan-800/60 rounded-lg transition-all"
+                    >
+                      <MapPin className="w-3 h-3 text-cyan-400" />
+                      <span>Locate</span>
+                    </button>
+
+                    <button
+                      onClick={(e) => handleOpenFolder(item.path, e)}
+                      title="Open inside Windows Explorer"
+                      className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             );

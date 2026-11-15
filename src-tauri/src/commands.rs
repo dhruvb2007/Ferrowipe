@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, State};
 
 use crate::cleaner::{query_recycle_bin, run_clean, run_scan};
 use crate::drives::get_system_drives;
 use crate::folder_analyzer::{
-    analyze_directory, execute_delete_folders, scan_deep_largest_folders, DeleteFoldersReport,
-    DeleteFoldersRequest, FolderAnalysisResult, FolderItem,
+    analyze_directory, analyze_full_disk_tree, execute_delete_folders, get_subfolder_children,
+    scan_deep_largest_folders, DeleteFoldersReport, DeleteFoldersRequest, FolderAnalysisResult,
+    FolderItem,
 };
 use crate::models::{CleanReport, CleanRequest, DriveInfo, ScanResult};
 
@@ -15,6 +17,7 @@ pub struct AppState {
     pub clean_cancel_flag: Arc<AtomicBool>,
     pub folder_analyze_cancel_flag: Arc<AtomicBool>,
     pub folder_delete_cancel_flag: Arc<AtomicBool>,
+    pub disk_cache: Arc<RwLock<HashMap<String, Vec<FolderItem>>>>,
 }
 
 impl Default for AppState {
@@ -24,6 +27,7 @@ impl Default for AppState {
             clean_cancel_flag: Arc::new(AtomicBool::new(false)),
             folder_analyze_cancel_flag: Arc::new(AtomicBool::new(false)),
             folder_delete_cancel_flag: Arc::new(AtomicBool::new(false)),
+            disk_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -96,20 +100,32 @@ pub struct RecycleBinStat {
 
 #[tauri::command]
 pub fn open_in_explorer(path: String) -> Result<(), String> {
+    let clean_path = path.replace('/', "\\");
     let _ = std::process::Command::new("explorer.exe")
-        .arg(&path)
+        .arg(&clean_path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn locate_in_explorer(path: String) -> Result<(), String> {
+    let clean_path = path.replace('/', "\\");
+    let _ = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{}", clean_path))
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 // ----------------------------------------------------
-// Large Folder Analyzer Commands
+// Large Folder Analyzer & Full Disk Commands
 // ----------------------------------------------------
 
 #[tauri::command]
 pub async fn analyze_folder(
     target_path: String,
+    depth: Option<usize>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<FolderAnalysisResult, String> {
@@ -117,10 +133,47 @@ pub async fn analyze_folder(
         .folder_analyze_cancel_flag
         .store(false, Ordering::SeqCst);
     let flag = Arc::clone(&state.folder_analyze_cancel_flag);
+    let d = depth.unwrap_or(0);
 
-    tauri::async_runtime::spawn_blocking(move || analyze_directory(&target_path, flag, app))
+    tauri::async_runtime::spawn_blocking(move || analyze_directory(&target_path, d, flag, app))
         .await
         .map_err(|e| format!("Folder analysis task error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn analyze_full_disk(
+    disk_root: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<FolderAnalysisResult, String> {
+    state
+        .folder_analyze_cancel_flag
+        .store(false, Ordering::SeqCst);
+    let flag = Arc::clone(&state.folder_analyze_cancel_flag);
+    let cache = Arc::clone(&state.disk_cache);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        analyze_full_disk_tree(&disk_root, cache, flag, app)
+    })
+    .await
+    .map_err(|e| format!("Full disk analysis error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_folder_children(
+    folder_path: String,
+    depth: usize,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<FolderItem>, String> {
+    let flag = Arc::clone(&state.folder_analyze_cancel_flag);
+    let cache = Arc::clone(&state.disk_cache);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        get_subfolder_children(&folder_path, depth, cache, flag, app)
+    })
+    .await
+    .map_err(|e| format!("Get subfolders error: {}", e))?
 }
 
 #[tauri::command]

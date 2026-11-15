@@ -60,12 +60,15 @@ Ferrowipe targets only verified, safe-to-clean junk locations without ever touch
 * **Safe Error Handling**: Files currently locked by active processes (open browsers or system services) are safely skipped without halting the cleanup pipeline.
 * **Comprehensive Post-Clean Report**: Detailed summary of freed bytes, files purged, and a filterable log of skipped items with exact reasons (e.g. `ERROR_SHARING_VIOLATION`), with one-click clipboard copying.
 
-### 4. 📂 Large Folder Analyzer & Space Hog Explorer (New!)
-Instantly identify what is actually consuming your disk space and safely delete large folders based on size:
-* **Multithreaded Parallel Analysis**: Uses Rayon parallel iterators combined with `jwalk` work-stealing threads to calculate folder sizes concurrently across all CPU cores.
-* **Dual View Modes**:
-  * **Folder Level Explorer**: Interactive drill-down navigation with breadcrumbs (`C:\ > Users > ...`), parent navigation, and proportional size bars showing percentage of parent space.
-  * **Top Space Hogs (Deep Scan)**: Deep scans the target drive or folder tree to rank the biggest directories eating up disk space.
+### 4. 📂 Full Disk Analyzer, Tree Explorer & Size-Based Deletion (New!)
+Instantly identify what is actually consuming your disk space, inspect nested subfolders, and safely delete large folders based on size:
+* **Full Disk Analysis Mode (`Analyze Full Disk`)**: Scans the entire drive with work-stealing parallel threads, computes recursive sizes bottom-up in seconds, and caches the hierarchical tree in memory for instant navigation.
+* **Interactive Expandable Tree View**:
+  * Expand/collapse chevrons (`>` / `v`) indicate whether subfolders are available inside any directory.
+  * Click to expand subfolders inline with depth-indented tree connectors.
+  * View exact recursive sizes, file counts, subfolder counts, and proportional size bars at every level.
+* **Locate to that Folder (`Locate Button`)**:
+  * One-click "Locate" button uses Windows Shell integration (`explorer.exe /select,"<path>"`) to open Windows File Explorer and immediately highlight that exact folder on disk.
 * **Granular Filters & Sorting**:
   * Filter by minimum size thresholds (`> 100 MB`, `> 500 MB`, `> 1 GB`, `> 5 GB`, `> 10 GB`).
   * Instant sorting by Size (Largest first), Size (Smallest first), File Count, or Name.

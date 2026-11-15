@@ -73,12 +73,15 @@ export interface FolderItem {
   id: string;
   name: string;
   path: string;
+  parent_path: string | null;
   size_bytes: number;
   file_count: number;
   subfolder_count: number;
   is_dir: boolean;
   last_modified: number | null;
   percentage: number;
+  depth: number;
+  has_subfolders: boolean;
 }
 
 export interface FolderAnalysisResult {
@@ -88,6 +91,7 @@ export interface FolderAnalysisResult {
   total_folders: number;
   items: FolderItem[];
   duration_ms: number;
+  is_full_disk: boolean;
 }
 
 export interface AnalyzeProgress {

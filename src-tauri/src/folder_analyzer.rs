@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -21,12 +22,15 @@ pub struct FolderItem {
     pub id: String,
     pub name: String,
     pub path: String,
+    pub parent_path: Option<String>,
     pub size_bytes: u64,
     pub file_count: u64,
     pub subfolder_count: u64,
     pub is_dir: bool,
     pub last_modified: Option<u64>,
     pub percentage: f64,
+    pub depth: usize,
+    pub has_subfolders: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +41,7 @@ pub struct FolderAnalysisResult {
     pub total_folders: u64,
     pub items: Vec<FolderItem>,
     pub duration_ms: u64,
+    pub is_full_disk: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +100,7 @@ pub fn is_protected_path(path: &Path) -> bool {
     false
 }
 
-/// Recursively computes directory size and file count using jwalk for maximum throughput
+/// Recursively computes directory size and file count using jwalk
 pub fn compute_directory_metrics(dir: &Path, cancel_flag: &AtomicBool) -> (u64, u64, u64) {
     let mut total_bytes = 0u64;
     let mut file_count = 0u64;
@@ -126,9 +131,10 @@ pub fn compute_directory_metrics(dir: &Path, cancel_flag: &AtomicBool) -> (u64, 
     (total_bytes, file_count, subfolder_count)
 }
 
-/// High-speed level analysis: analyzes immediate children of `target_path` in parallel
+/// Analyzes immediate children of `target_path` in parallel, returning FolderItems
 pub fn analyze_directory(
     target_path_str: &str,
+    depth: usize,
     cancel_flag: Arc<AtomicBool>,
     app: AppHandle,
 ) -> Result<FolderAnalysisResult, String> {
@@ -172,6 +178,7 @@ pub fn analyze_directory(
     let total_files_clone = Arc::clone(&total_scanned_files);
     let last_emit_clone = Arc::clone(&last_emit);
     let app_clone = app.clone();
+    let parent_str = Some(target_path.to_string_lossy().to_string());
 
     let mut folder_items: Vec<FolderItem> = direct_dirs
         .into_par_iter()
@@ -218,17 +225,20 @@ pub fn analyze_directory(
                 id: dir_path.to_string_lossy().to_string(),
                 name,
                 path: dir_path.to_string_lossy().to_string(),
+                parent_path: parent_str.clone(),
                 size_bytes,
                 file_count,
                 subfolder_count,
                 is_dir: true,
                 last_modified,
                 percentage: 0.0,
+                depth,
+                has_subfolders: subfolder_count > 0,
             })
         })
         .collect();
 
-    // Process immediate root files
+    // Process immediate files
     for file_path in direct_files {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
@@ -254,12 +264,15 @@ pub fn analyze_directory(
                 id: file_path.to_string_lossy().to_string(),
                 name,
                 path: file_path.to_string_lossy().to_string(),
+                parent_path: Some(target_path.to_string_lossy().to_string()),
                 size_bytes: size,
                 file_count: 1,
                 subfolder_count: 0,
                 is_dir: false,
                 last_modified,
                 percentage: 0.0,
+                depth,
+                has_subfolders: false,
             });
         }
     }
@@ -276,11 +289,10 @@ pub fn analyze_directory(
 
     folder_items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
 
-    // Emit final progress
     let _ = app.emit(
         "analyze:progress",
         AnalyzeProgress {
-            current_folder: "Completed".to_string(),
+            current_folder: "Analysis Complete".to_string(),
             folders_scanned: total_scanned_dirs.load(Ordering::Relaxed),
             files_scanned: total_scanned_files.load(Ordering::Relaxed),
             bytes_scanned: overall_bytes,
@@ -294,7 +306,282 @@ pub fn analyze_directory(
         total_folders: total_scanned_dirs.load(Ordering::Relaxed),
         items: folder_items,
         duration_ms: start_time.elapsed().as_millis() as u64,
+        is_full_disk: false,
     })
+}
+
+/// Helper structure for full disk bottom-up aggregation
+struct RawDirNode {
+    path: PathBuf,
+    name: String,
+    parent_path: Option<String>,
+    direct_bytes: u64,
+    direct_files: u64,
+    total_bytes: u64,
+    total_files: u64,
+    subfolder_count: u64,
+    last_modified: Option<u64>,
+}
+
+/// High-speed Full Disk Analysis: walks the entire drive, aggregates sizes bottom-up,
+/// and populates the in-memory cache for instant hierarchical tree expansion.
+pub fn analyze_full_disk_tree(
+    disk_root_str: &str,
+    cache: Arc<RwLock<HashMap<String, Vec<FolderItem>>>>,
+    cancel_flag: Arc<AtomicBool>,
+    app: AppHandle,
+) -> Result<FolderAnalysisResult, String> {
+    let start_time = Instant::now();
+    let root_path = PathBuf::from(disk_root_str);
+
+    if !root_path.exists() {
+        return Err(format!("Disk root does not exist: {}", disk_root_str));
+    }
+
+    let scanned_files = Arc::new(AtomicU64::new(0));
+    let scanned_bytes = Arc::new(AtomicU64::new(0));
+    let scanned_folders = Arc::new(AtomicU64::new(0));
+    let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
+
+    let mut raw_nodes: HashMap<String, RawDirNode> = HashMap::new();
+
+    // Initialize root node
+    let root_norm = normalize_path_str(&root_path.to_string_lossy());
+    raw_nodes.insert(
+        root_norm.clone(),
+        RawDirNode {
+            path: root_path.clone(),
+            name: disk_root_str.to_string(),
+            parent_path: None,
+            direct_bytes: 0,
+            direct_files: 0,
+            total_bytes: 0,
+            total_files: 0,
+            subfolder_count: 0,
+            last_modified: None,
+        },
+    );
+
+    // Parallel walk using jwalk
+    for entry_res in jwalk::WalkDir::new(&root_path)
+        .skip_hidden(false)
+        .follow_links(false)
+    {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Full disk analysis canceled by user".to_string());
+        }
+
+        if let Ok(entry) = entry_res {
+            if entry.depth == 0 {
+                continue;
+            }
+
+            let path = entry.path();
+            let file_type = entry.file_type();
+
+            if file_type.is_dir() {
+                scanned_folders.fetch_add(1, Ordering::Relaxed);
+                let path_norm = normalize_path_str(&path.to_string_lossy());
+                let parent_norm = path
+                    .parent()
+                    .map(|p| normalize_path_str(&p.to_string_lossy()));
+
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+                let last_mod = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+
+                raw_nodes.insert(
+                    path_norm.clone(),
+                    RawDirNode {
+                        path: path.clone(),
+                        name,
+                        parent_path: parent_norm,
+                        direct_bytes: 0,
+                        direct_files: 0,
+                        total_bytes: 0,
+                        total_files: 0,
+                        subfolder_count: 0,
+                        last_modified: last_mod,
+                    },
+                );
+            } else if file_type.is_file() {
+                scanned_files.fetch_add(1, Ordering::Relaxed);
+                if let Ok(meta) = entry.metadata() {
+                    let size = meta.len();
+                    scanned_bytes.fetch_add(size, Ordering::Relaxed);
+
+                    if let Some(parent) = path.parent() {
+                        let parent_norm = normalize_path_str(&parent.to_string_lossy());
+                        if let Some(parent_node) = raw_nodes.get_mut(&parent_norm) {
+                            parent_node.direct_bytes += size;
+                            parent_node.direct_files += 1;
+                        }
+                    }
+                }
+            }
+
+            // Throttled progress emit
+            if let Ok(mut last) = last_emit.lock() {
+                if last.elapsed() >= Duration::from_millis(60) {
+                    *last = Instant::now();
+                    let _ = app.emit(
+                        "analyze:progress",
+                        AnalyzeProgress {
+                            current_folder: path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            folders_scanned: scanned_folders.load(Ordering::Relaxed),
+                            files_scanned: scanned_files.load(Ordering::Relaxed),
+                            bytes_scanned: scanned_bytes.load(Ordering::Relaxed),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // Sort paths by depth descending for bottom-up aggregation
+    let mut sorted_keys: Vec<String> = raw_nodes.keys().cloned().collect();
+    sorted_keys.sort_by(|a, b| {
+        let depth_a = a.matches('\\').count();
+        let depth_b = b.matches('\\').count();
+        depth_b.cmp(&depth_a)
+    });
+
+    // Count subfolders and accumulate sizes bottom-up
+    for key in &sorted_keys {
+        let (total_b, total_f, parent_opt) = {
+            let node = raw_nodes.get_mut(key).unwrap();
+            node.total_bytes += node.direct_bytes;
+            node.total_files += node.direct_files;
+            (node.total_bytes, node.total_files, node.parent_path.clone())
+        };
+
+        if let Some(parent_key) = parent_opt {
+            if let Some(parent_node) = raw_nodes.get_mut(&parent_key) {
+                parent_node.total_bytes += total_b;
+                parent_node.total_files += total_f;
+                parent_node.subfolder_count += 1;
+            }
+        }
+    }
+
+    // Build the hierarchical cache: parent_norm -> Vec<FolderItem>
+    let mut new_cache: HashMap<String, Vec<FolderItem>> = HashMap::new();
+
+    for (norm_path, node) in &raw_nodes {
+        if let Some(parent_key) = &node.parent_path {
+            let parent_total = raw_nodes
+                .get(parent_key)
+                .map(|p| p.total_bytes)
+                .unwrap_or(node.total_bytes);
+
+            let pct = if parent_total > 0 {
+                ((node.total_bytes as f64 / parent_total as f64) * 1000.0).round() / 10.0
+            } else {
+                0.0
+            };
+
+            let depth = norm_path.matches('\\').count();
+
+            let item = FolderItem {
+                id: node.path.to_string_lossy().to_string(),
+                name: node.name.clone(),
+                path: node.path.to_string_lossy().to_string(),
+                parent_path: Some(parent_key.clone()),
+                size_bytes: node.total_bytes,
+                file_count: node.total_files,
+                subfolder_count: node.subfolder_count,
+                is_dir: true,
+                last_modified: node.last_modified,
+                percentage: pct,
+                depth,
+                has_subfolders: node.subfolder_count > 0,
+            };
+
+            new_cache
+                .entry(parent_key.clone())
+                .or_default()
+                .push(item);
+        }
+    }
+
+    // Sort every parent's child list by size descending
+    for items in new_cache.values_mut() {
+        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    }
+
+    // Populate global disk cache
+    if let Ok(mut c) = cache.write() {
+        *c = new_cache.clone();
+    }
+
+    let root_items = new_cache.get(&root_norm).cloned().unwrap_or_default();
+    let root_total_bytes = raw_nodes.get(&root_norm).map(|r| r.total_bytes).unwrap_or(0);
+    let root_total_files = raw_nodes.get(&root_norm).map(|r| r.total_files).unwrap_or(0);
+    let root_total_folders = raw_nodes.len() as u64;
+
+    let _ = app.emit(
+        "analyze:progress",
+        AnalyzeProgress {
+            current_folder: "Full Disk Scan Completed".to_string(),
+            folders_scanned: root_total_folders,
+            files_scanned: root_total_files,
+            bytes_scanned: root_total_bytes,
+        },
+    );
+
+    Ok(FolderAnalysisResult {
+        target_path: disk_root_str.to_string(),
+        total_bytes: root_total_bytes,
+        total_files: root_total_files,
+        total_folders: root_total_folders,
+        items: root_items,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+        is_full_disk: true,
+    })
+}
+
+/// Retrieves child items for a folder. Uses cached results if available,
+/// otherwise dynamically scans immediate children in parallel.
+pub fn get_subfolder_children(
+    folder_path_str: &str,
+    depth: usize,
+    cache: Arc<RwLock<HashMap<String, Vec<FolderItem>>>>,
+    cancel_flag: Arc<AtomicBool>,
+    app: AppHandle,
+) -> Result<Vec<FolderItem>, String> {
+    let norm = normalize_path_str(folder_path_str);
+
+    // 1. Check cache first
+    if let Ok(c) = cache.read() {
+        if let Some(items) = c.get(&norm) {
+            return Ok(items.clone());
+        }
+    }
+
+    // 2. If not cached, dynamically scan immediate level
+    let result = analyze_directory(folder_path_str, depth, cancel_flag, app)?;
+
+    // Cache dynamic result
+    if let Ok(mut c) = cache.write() {
+        c.insert(norm, result.items.clone());
+    }
+
+    Ok(result.items)
+}
+
+fn normalize_path_str(s: &str) -> String {
+    s.replace('/', "\\").trim_end_matches('\\').to_uppercase()
 }
 
 /// Deep scan: Finds the largest directories across the entire target tree
@@ -313,7 +600,6 @@ pub fn scan_deep_largest_folders(
     let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
     let scanned_count = Arc::new(AtomicU64::new(0));
 
-    // Discover first 2 levels of subdirectories to fan-out analysis
     let mut candidate_dirs = Vec::new();
     if let Ok(entries) = fs::read_dir(&target) {
         for entry in entries.flatten() {
@@ -321,7 +607,6 @@ pub fn scan_deep_largest_folders(
                 if ft.is_dir() {
                     let p = entry.path();
                     candidate_dirs.push(p.clone());
-                    // Level 2
                     if let Ok(sub_entries) = fs::read_dir(&p) {
                         for sub in sub_entries.flatten() {
                             if let Ok(sft) = sub.file_type() {
@@ -336,7 +621,6 @@ pub fn scan_deep_largest_folders(
         }
     }
 
-    let _total_candidates = candidate_dirs.len();
     let cancel_clone = Arc::clone(&cancel_flag);
     let app_clone = app.clone();
     let last_emit_clone = Arc::clone(&last_emit);
@@ -386,12 +670,17 @@ pub fn scan_deep_largest_folders(
                     id: dir_path.to_string_lossy().to_string(),
                     name,
                     path: dir_path.to_string_lossy().to_string(),
+                    parent_path: dir_path
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string()),
                     size_bytes: size,
                     file_count: files,
                     subfolder_count: subfolders,
                     is_dir: true,
                     last_modified: last_mod,
                     percentage: 0.0,
+                    depth: 0,
+                    has_subfolders: subfolders > 0,
                 })
             } else {
                 None
@@ -402,7 +691,6 @@ pub fn scan_deep_largest_folders(
     results.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
     results.truncate(top_n);
 
-    // Calculate relative percentage based on largest found
     let max_size = results.first().map(|r| r.size_bytes).unwrap_or(1);
     for item in &mut results {
         item.percentage = ((item.size_bytes as f64 / max_size as f64) * 1000.0).round() / 10.0;
@@ -452,7 +740,6 @@ pub fn execute_delete_folders(
         };
 
         if request.permanent {
-            // Permanent deletion via std::fs
             let delete_res = if path.is_dir() {
                 fs::remove_dir_all(&path)
             } else {
@@ -473,7 +760,6 @@ pub fn execute_delete_folders(
                 }
             }
         } else {
-            // Safe deletion: Move to Windows Recycle Bin via SHFileOperationW
             let wide_path = to_double_null_wide(&path_str);
             let mut file_op = SHFILEOPSTRUCTW {
                 hwnd: null_mut(),
