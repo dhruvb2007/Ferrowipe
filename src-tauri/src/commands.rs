@@ -4,11 +4,17 @@ use tauri::{AppHandle, State};
 
 use crate::cleaner::{query_recycle_bin, run_clean, run_scan};
 use crate::drives::get_system_drives;
+use crate::folder_analyzer::{
+    analyze_directory, execute_delete_folders, scan_deep_largest_folders, DeleteFoldersReport,
+    DeleteFoldersRequest, FolderAnalysisResult, FolderItem,
+};
 use crate::models::{CleanReport, CleanRequest, DriveInfo, ScanResult};
 
 pub struct AppState {
     pub scan_cancel_flag: Arc<AtomicBool>,
     pub clean_cancel_flag: Arc<AtomicBool>,
+    pub folder_analyze_cancel_flag: Arc<AtomicBool>,
+    pub folder_delete_cancel_flag: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -16,6 +22,8 @@ impl Default for AppState {
         Self {
             scan_cancel_flag: Arc::new(AtomicBool::new(false)),
             clean_cancel_flag: Arc::new(AtomicBool::new(false)),
+            folder_analyze_cancel_flag: Arc::new(AtomicBool::new(false)),
+            folder_delete_cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -34,7 +42,6 @@ pub async fn start_scan(
     state.scan_cancel_flag.store(false, Ordering::SeqCst);
     let flag = Arc::clone(&state.scan_cancel_flag);
 
-    // Spawn on blocking threadpool so async runtime isn't blocked
     tauri::async_runtime::spawn_blocking(move || run_scan(active_categories, flag, app))
         .await
         .map_err(|e| format!("Scan task failed: {}", e))
@@ -93,5 +100,78 @@ pub fn open_in_explorer(path: String) -> Result<(), String> {
         .arg(&path)
         .spawn()
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ----------------------------------------------------
+// Large Folder Analyzer Commands
+// ----------------------------------------------------
+
+#[tauri::command]
+pub async fn analyze_folder(
+    target_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<FolderAnalysisResult, String> {
+    state
+        .folder_analyze_cancel_flag
+        .store(false, Ordering::SeqCst);
+    let flag = Arc::clone(&state.folder_analyze_cancel_flag);
+
+    tauri::async_runtime::spawn_blocking(move || analyze_directory(&target_path, flag, app))
+        .await
+        .map_err(|e| format!("Folder analysis task error: {}", e))?
+}
+
+#[tauri::command]
+pub fn cancel_folder_analysis(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .folder_analyze_cancel_flag
+        .store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_deep_largest_folders(
+    target_path: String,
+    min_size_mb: u64,
+    top_n: usize,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<FolderItem>, String> {
+    state
+        .folder_analyze_cancel_flag
+        .store(false, Ordering::SeqCst);
+    let flag = Arc::clone(&state.folder_analyze_cancel_flag);
+    let min_bytes = min_size_mb * 1024 * 1024;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_deep_largest_folders(&target_path, min_bytes, top_n, flag, app)
+    })
+    .await
+    .map_err(|e| format!("Deep scan error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn delete_folders(
+    request: DeleteFoldersRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DeleteFoldersReport, String> {
+    state
+        .folder_delete_cancel_flag
+        .store(false, Ordering::SeqCst);
+    let flag = Arc::clone(&state.folder_delete_cancel_flag);
+
+    tauri::async_runtime::spawn_blocking(move || execute_delete_folders(request, flag, app))
+        .await
+        .map_err(|e| format!("Folder delete error: {}", e))
+}
+
+#[tauri::command]
+pub fn cancel_folder_delete(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .folder_delete_cancel_flag
+        .store(true, Ordering::SeqCst);
     Ok(())
 }

@@ -1,0 +1,525 @@
+use std::fs;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use windows_sys::Win32::UI::Shell::{
+    SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
+    SHFILEOPSTRUCTW,
+};
+
+use crate::models::SkippedFile;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderItem {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub file_count: u64,
+    pub subfolder_count: u64,
+    pub is_dir: bool,
+    pub last_modified: Option<u64>,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderAnalysisResult {
+    pub target_path: String,
+    pub total_bytes: u64,
+    pub total_files: u64,
+    pub total_folders: u64,
+    pub items: Vec<FolderItem>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalyzeProgress {
+    pub current_folder: String,
+    pub folders_scanned: u64,
+    pub files_scanned: u64,
+    pub bytes_scanned: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteFoldersRequest {
+    pub paths: Vec<String>,
+    pub permanent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteFoldersReport {
+    pub deleted_paths: Vec<String>,
+    pub failed_paths: Vec<SkippedFile>,
+    pub freed_bytes: u64,
+    pub duration_ms: u64,
+}
+
+fn to_double_null_wide(s: &str) -> Vec<u16> {
+    let mut wide: Vec<u16> = std::ffi::OsStr::new(s).encode_wide().collect();
+    wide.push(0);
+    wide.push(0); // Double null termination for SHFileOperationW
+    wide
+}
+
+pub fn is_protected_path(path: &Path) -> bool {
+    let clean = path.to_string_lossy().replace('/', "\\").to_uppercase();
+    let trimmed = clean.trim_end_matches('\\');
+
+    // Protect root drives e.g. "C:", "D:"
+    if trimmed.len() <= 3 && trimmed.ends_with(':') {
+        return true;
+    }
+
+    let protected = [
+        "C:\\WINDOWS",
+        "C:\\WINDOWS\\SYSTEM32",
+        "C:\\WINDOWS\\SYSWOW64",
+        "C:\\USERS",
+        "C:\\PROGRAM FILES",
+        "C:\\PROGRAM FILES (x86)",
+    ];
+
+    for p in protected {
+        if trimmed == p {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Recursively computes directory size and file count using jwalk for maximum throughput
+pub fn compute_directory_metrics(dir: &Path, cancel_flag: &AtomicBool) -> (u64, u64, u64) {
+    let mut total_bytes = 0u64;
+    let mut file_count = 0u64;
+    let mut subfolder_count = 0u64;
+
+    for entry_res in jwalk::WalkDir::new(dir).skip_hidden(false).follow_links(false) {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Ok(entry) = entry_res {
+            if entry.depth == 0 {
+                continue;
+            }
+
+            let file_type = entry.file_type();
+            if file_type.is_dir() {
+                subfolder_count += 1;
+            } else if file_type.is_file() {
+                file_count += 1;
+                if let Ok(meta) = entry.metadata() {
+                    total_bytes += meta.len();
+                }
+            }
+        }
+    }
+
+    (total_bytes, file_count, subfolder_count)
+}
+
+/// High-speed level analysis: analyzes immediate children of `target_path` in parallel
+pub fn analyze_directory(
+    target_path_str: &str,
+    cancel_flag: Arc<AtomicBool>,
+    app: AppHandle,
+) -> Result<FolderAnalysisResult, String> {
+    let start_time = Instant::now();
+    let target_path = PathBuf::from(target_path_str);
+
+    if !target_path.exists() {
+        return Err(format!("Path does not exist: {}", target_path_str));
+    }
+
+    let entries = match fs::read_dir(&target_path) {
+        Ok(e) => e,
+        Err(err) => return Err(format!("Unable to access directory: {}", err)),
+    };
+
+    let mut direct_files = Vec::new();
+    let mut direct_dirs = Vec::new();
+
+    for entry in entries.flatten() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let path = entry.path();
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_dir() {
+                direct_dirs.push(path);
+            } else if file_type.is_file() {
+                direct_files.push(path);
+            }
+        }
+    }
+
+    let total_scanned_bytes = Arc::new(AtomicU64::new(0));
+    let total_scanned_files = Arc::new(AtomicU64::new(0));
+    let total_scanned_dirs = Arc::new(AtomicU64::new(direct_dirs.len() as u64));
+    let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
+
+    // Process immediate subfolders in parallel using Rayon
+    let cancel_flag_clone = Arc::clone(&cancel_flag);
+    let total_bytes_clone = Arc::clone(&total_scanned_bytes);
+    let total_files_clone = Arc::clone(&total_scanned_files);
+    let last_emit_clone = Arc::clone(&last_emit);
+    let app_clone = app.clone();
+
+    let mut folder_items: Vec<FolderItem> = direct_dirs
+        .into_par_iter()
+        .filter_map(|dir_path| {
+            if cancel_flag_clone.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            let name = dir_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| dir_path.to_string_lossy().to_string());
+
+            let (size_bytes, file_count, subfolder_count) =
+                compute_directory_metrics(&dir_path, &cancel_flag_clone);
+
+            total_bytes_clone.fetch_add(size_bytes, Ordering::Relaxed);
+            total_files_clone.fetch_add(file_count, Ordering::Relaxed);
+
+            // Throttled progress emit
+            if let Ok(mut last) = last_emit_clone.lock() {
+                if last.elapsed() >= Duration::from_millis(60) {
+                    *last = Instant::now();
+                    let _ = app_clone.emit(
+                        "analyze:progress",
+                        AnalyzeProgress {
+                            current_folder: name.clone(),
+                            folders_scanned: total_scanned_dirs.load(Ordering::Relaxed),
+                            files_scanned: total_files_clone.load(Ordering::Relaxed),
+                            bytes_scanned: total_bytes_clone.load(Ordering::Relaxed),
+                        },
+                    );
+                }
+            }
+
+            let last_modified = dir_path
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            Some(FolderItem {
+                id: dir_path.to_string_lossy().to_string(),
+                name,
+                path: dir_path.to_string_lossy().to_string(),
+                size_bytes,
+                file_count,
+                subfolder_count,
+                is_dir: true,
+                last_modified,
+                percentage: 0.0,
+            })
+        })
+        .collect();
+
+    // Process immediate root files
+    for file_path in direct_files {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Ok(meta) = file_path.metadata() {
+            let size = meta.len();
+            total_scanned_bytes.fetch_add(size, Ordering::Relaxed);
+            total_scanned_files.fetch_add(1, Ordering::Relaxed);
+
+            let last_modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            let name = file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_path.to_string_lossy().to_string());
+
+            folder_items.push(FolderItem {
+                id: file_path.to_string_lossy().to_string(),
+                name,
+                path: file_path.to_string_lossy().to_string(),
+                size_bytes: size,
+                file_count: 1,
+                subfolder_count: 0,
+                is_dir: false,
+                last_modified,
+                percentage: 0.0,
+            });
+        }
+    }
+
+    let overall_bytes = total_scanned_bytes.load(Ordering::Relaxed);
+
+    // Calculate percentage and sort descending by size
+    for item in &mut folder_items {
+        if overall_bytes > 0 {
+            item.percentage =
+                ((item.size_bytes as f64 / overall_bytes as f64) * 1000.0).round() / 10.0;
+        }
+    }
+
+    folder_items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+
+    // Emit final progress
+    let _ = app.emit(
+        "analyze:progress",
+        AnalyzeProgress {
+            current_folder: "Completed".to_string(),
+            folders_scanned: total_scanned_dirs.load(Ordering::Relaxed),
+            files_scanned: total_scanned_files.load(Ordering::Relaxed),
+            bytes_scanned: overall_bytes,
+        },
+    );
+
+    Ok(FolderAnalysisResult {
+        target_path: target_path.to_string_lossy().to_string(),
+        total_bytes: overall_bytes,
+        total_files: total_scanned_files.load(Ordering::Relaxed),
+        total_folders: total_scanned_dirs.load(Ordering::Relaxed),
+        items: folder_items,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    })
+}
+
+/// Deep scan: Finds the largest directories across the entire target tree
+pub fn scan_deep_largest_folders(
+    target_path_str: &str,
+    min_size_bytes: u64,
+    top_n: usize,
+    cancel_flag: Arc<AtomicBool>,
+    app: AppHandle,
+) -> Result<Vec<FolderItem>, String> {
+    let target = PathBuf::from(target_path_str);
+    if !target.exists() {
+        return Err(format!("Target does not exist: {}", target_path_str));
+    }
+
+    let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let scanned_count = Arc::new(AtomicU64::new(0));
+
+    // Discover first 2 levels of subdirectories to fan-out analysis
+    let mut candidate_dirs = Vec::new();
+    if let Ok(entries) = fs::read_dir(&target) {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    let p = entry.path();
+                    candidate_dirs.push(p.clone());
+                    // Level 2
+                    if let Ok(sub_entries) = fs::read_dir(&p) {
+                        for sub in sub_entries.flatten() {
+                            if let Ok(sft) = sub.file_type() {
+                                if sft.is_dir() {
+                                    candidate_dirs.push(sub.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let _total_candidates = candidate_dirs.len();
+    let cancel_clone = Arc::clone(&cancel_flag);
+    let app_clone = app.clone();
+    let last_emit_clone = Arc::clone(&last_emit);
+    let scanned_clone = Arc::clone(&scanned_count);
+
+    let mut results: Vec<FolderItem> = candidate_dirs
+        .into_par_iter()
+        .filter_map(|dir_path| {
+            if cancel_clone.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            let (size, files, subfolders) = compute_directory_metrics(&dir_path, &cancel_clone);
+            scanned_clone.fetch_add(1, Ordering::Relaxed);
+
+            if let Ok(mut last) = last_emit_clone.lock() {
+                if last.elapsed() >= Duration::from_millis(60) {
+                    *last = Instant::now();
+                    let _ = app_clone.emit(
+                        "analyze:progress",
+                        AnalyzeProgress {
+                            current_folder: dir_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            folders_scanned: scanned_clone.load(Ordering::Relaxed),
+                            files_scanned: files,
+                            bytes_scanned: size,
+                        },
+                    );
+                }
+            }
+
+            if size >= min_size_bytes {
+                let name = dir_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let last_mod = dir_path
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+
+                Some(FolderItem {
+                    id: dir_path.to_string_lossy().to_string(),
+                    name,
+                    path: dir_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    file_count: files,
+                    subfolder_count: subfolders,
+                    is_dir: true,
+                    last_modified: last_mod,
+                    percentage: 0.0,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    results.truncate(top_n);
+
+    // Calculate relative percentage based on largest found
+    let max_size = results.first().map(|r| r.size_bytes).unwrap_or(1);
+    for item in &mut results {
+        item.percentage = ((item.size_bytes as f64 / max_size as f64) * 1000.0).round() / 10.0;
+    }
+
+    Ok(results)
+}
+
+/// Executes safe deletion of folders, supporting Recycle Bin and permanent deletion
+pub fn execute_delete_folders(
+    request: DeleteFoldersRequest,
+    cancel_flag: Arc<AtomicBool>,
+    _app: AppHandle,
+) -> DeleteFoldersReport {
+    let start_time = Instant::now();
+    let mut deleted_paths = Vec::new();
+    let mut failed_paths = Vec::new();
+    let mut freed_bytes = 0u64;
+
+    for path_str in request.paths {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let path = PathBuf::from(&path_str);
+        if !path.exists() {
+            continue;
+        }
+
+        // 1. Safety check
+        if is_protected_path(&path) {
+            failed_paths.push(SkippedFile {
+                path: path_str,
+                category_id: "folder".to_string(),
+                reason: "Action Blocked: Critical Windows system directory is protected."
+                    .to_string(),
+            });
+            continue;
+        }
+
+        // Measure size before deleting
+        let item_size = if path.is_dir() {
+            let (bytes, _, _) = compute_directory_metrics(&path, &cancel_flag);
+            bytes
+        } else {
+            path.metadata().map(|m| m.len()).unwrap_or(0)
+        };
+
+        if request.permanent {
+            // Permanent deletion via std::fs
+            let delete_res = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+
+            match delete_res {
+                Ok(_) => {
+                    freed_bytes += item_size;
+                    deleted_paths.push(path_str);
+                }
+                Err(e) => {
+                    failed_paths.push(SkippedFile {
+                        path: path_str,
+                        category_id: "folder".to_string(),
+                        reason: format!("Failed to delete: {}", e),
+                    });
+                }
+            }
+        } else {
+            // Safe deletion: Move to Windows Recycle Bin via SHFileOperationW
+            let wide_path = to_double_null_wide(&path_str);
+            let mut file_op = SHFILEOPSTRUCTW {
+                hwnd: null_mut(),
+                wFunc: FO_DELETE,
+                pFrom: wide_path.as_ptr(),
+                pTo: null_mut(),
+                fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI) as u16,
+                fAnyOperationsAborted: 0,
+                hNameMappings: null_mut(),
+                lpszProgressTitle: null_mut(),
+            };
+
+            let res = unsafe { SHFileOperationW(&mut file_op) };
+            if res == 0 && file_op.fAnyOperationsAborted == 0 {
+                freed_bytes += item_size;
+                deleted_paths.push(path_str);
+            } else {
+                failed_paths.push(SkippedFile {
+                    path: path_str,
+                    category_id: "folder".to_string(),
+                    reason: format!("Recycle Bin operation failed with code {}", res),
+                });
+            }
+        }
+    }
+
+    DeleteFoldersReport {
+        deleted_paths,
+        failed_paths,
+        freed_bytes,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_protected_paths() {
+        assert!(is_protected_path(Path::new("C:\\")));
+        assert!(is_protected_path(Path::new("C:")));
+        assert!(is_protected_path(Path::new("C:\\Windows")));
+        assert!(is_protected_path(Path::new("C:\\WINDOWS\\System32")));
+        assert!(is_protected_path(Path::new("C:\\Program Files")));
+        assert!(!is_protected_path(Path::new("C:\\Users\\dhruv\\Downloads")));
+        assert!(!is_protected_path(Path::new("D:\\Projects\\Ferrowipe")));
+    }
+}

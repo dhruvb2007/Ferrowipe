@@ -60,6 +60,21 @@ Ferrowipe targets only verified, safe-to-clean junk locations without ever touch
 * **Safe Error Handling**: Files currently locked by active processes (open browsers or system services) are safely skipped without halting the cleanup pipeline.
 * **Comprehensive Post-Clean Report**: Detailed summary of freed bytes, files purged, and a filterable log of skipped items with exact reasons (e.g. `ERROR_SHARING_VIOLATION`), with one-click clipboard copying.
 
+### 4. 📂 Large Folder Analyzer & Space Hog Explorer (New!)
+Instantly identify what is actually consuming your disk space and safely delete large folders based on size:
+* **Multithreaded Parallel Analysis**: Uses Rayon parallel iterators combined with `jwalk` work-stealing threads to calculate folder sizes concurrently across all CPU cores.
+* **Dual View Modes**:
+  * **Folder Level Explorer**: Interactive drill-down navigation with breadcrumbs (`C:\ > Users > ...`), parent navigation, and proportional size bars showing percentage of parent space.
+  * **Top Space Hogs (Deep Scan)**: Deep scans the target drive or folder tree to rank the biggest directories eating up disk space.
+* **Granular Filters & Sorting**:
+  * Filter by minimum size thresholds (`> 100 MB`, `> 500 MB`, `> 1 GB`, `> 5 GB`, `> 10 GB`).
+  * Instant sorting by Size (Largest first), Size (Smallest first), File Count, or Name.
+* **Safe & Permanent Deletion Controls**:
+  * Multi-select folders and files with live total space counter.
+  * **Safe Mode (Default)**: Moves deleted folders to the native Windows Recycle Bin using `SHFileOperationW`, allowing recovery if needed.
+  * **Permanent Deletion Mode**: Bypasses the Recycle Bin for immediate disk space reclamation.
+  * **Built-in Safety Shield**: Hardcoded protection preventing accidental deletion of critical Windows system directories (`C:\Windows`, `C:\`, root partitions, system folders).
+
 ---
 
 ## ⚡ Performance Architecture

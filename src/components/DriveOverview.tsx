@@ -17,12 +17,14 @@ interface DriveOverviewProps {
   drives: DriveInfo[];
   isLoading: boolean;
   onNavigateToCleaner: () => void;
+  onNavigateToAnalyzer?: (path: string) => void;
 }
 
 export const DriveOverview: React.FC<DriveOverviewProps> = ({
   drives,
   isLoading,
   onNavigateToCleaner,
+  onNavigateToAnalyzer,
 }) => {
   const lowSpaceDrives = drives.filter((d) => d.is_low_space);
 
@@ -231,12 +233,22 @@ export const DriveOverview: React.FC<DriveOverviewProps> = ({
                     ? '⚡ NVMe / SSD Trim Active'
                     : 'Mechanical Magnetic Disk'}
                 </span>
-                <button
-                  onClick={onNavigateToCleaner}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold hover:underline flex items-center gap-1"
-                >
-                  Analyze & Clean Junk &rarr;
-                </button>
+                <div className="flex items-center gap-3">
+                  {onNavigateToAnalyzer && (
+                    <button
+                      onClick={() => onNavigateToAnalyzer(drive.mount_point)}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold hover:underline flex items-center gap-1"
+                    >
+                      Explore Folders &rarr;
+                    </button>
+                  )}
+                  <button
+                    onClick={onNavigateToCleaner}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold hover:underline flex items-center gap-1"
+                  >
+                    Clean Junk &rarr;
+                  </button>
+                </div>
               </div>
             </div>
           );

@@ -1,6 +1,7 @@
 pub mod cleaner;
 pub mod commands;
 pub mod drives;
+pub mod folder_analyzer;
 pub mod models;
 pub mod rules;
 
@@ -18,7 +19,12 @@ pub fn run() {
             start_clean,
             cancel_clean,
             query_all_recycle_bins,
-            open_in_explorer
+            open_in_explorer,
+            analyze_folder,
+            cancel_folder_analysis,
+            get_deep_largest_folders,
+            delete_folders,
+            cancel_folder_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running Ferrowipe application");

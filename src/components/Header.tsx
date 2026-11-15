@@ -1,12 +1,11 @@
 import React from 'react';
-import { HardDrive, Trash2, Shield, RefreshCw } from 'lucide-react';
+import { HardDrive, Trash2, Shield, RefreshCw, FolderTree } from 'lucide-react';
 
 interface HeaderProps {
-  currentTab: 'drives' | 'cleaner';
-  onSelectTab: (tab: 'drives' | 'cleaner') => void;
+  currentTab: 'drives' | 'cleaner' | 'analyzer';
+  onSelectTab: (tab: 'drives' | 'cleaner' | 'analyzer') => void;
   onRefreshDrives: () => void;
   isRefreshing: boolean;
-  totalSpaceCleanable?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -61,6 +60,18 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Trash2 className="w-4 h-4" />
           Junk Cleaner
+        </button>
+
+        <button
+          onClick={() => onSelectTab('analyzer')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+            currentTab === 'analyzer'
+              ? 'bg-slate-800 text-emerald-400 shadow-sm border border-slate-700/60'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
+          }`}
+        >
+          <FolderTree className="w-4 h-4" />
+          Folder Analyzer
         </button>
       </nav>
 

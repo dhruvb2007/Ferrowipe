@@ -67,3 +67,44 @@ export interface CleanRequest {
   selected_category_ids: string[];
   selected_item_ids: string[];
 }
+
+
+export interface FolderItem {
+  id: string;
+  name: string;
+  path: string;
+  size_bytes: number;
+  file_count: number;
+  subfolder_count: number;
+  is_dir: boolean;
+  last_modified: number | null;
+  percentage: number;
+}
+
+export interface FolderAnalysisResult {
+  target_path: string;
+  total_bytes: number;
+  total_files: number;
+  total_folders: number;
+  items: FolderItem[];
+  duration_ms: number;
+}
+
+export interface AnalyzeProgress {
+  current_folder: string;
+  folders_scanned: number;
+  files_scanned: number;
+  bytes_scanned: number;
+}
+
+export interface DeleteFoldersRequest {
+  paths: string[];
+  permanent: boolean;
+}
+
+export interface DeleteFoldersReport {
+  deleted_paths: string[];
+  failed_paths: SkippedFile[];
+  freed_bytes: number;
+  duration_ms: number;
+}

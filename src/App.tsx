@@ -4,9 +4,11 @@ import { DriveInfo } from './types';
 import { Header } from './components/Header';
 import { DriveOverview } from './components/DriveOverview';
 import { JunkCleaner } from './components/JunkCleaner';
+import { FolderAnalyzer } from './components/FolderAnalyzer';
 
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<'drives' | 'cleaner'>('drives');
+  const [currentTab, setCurrentTab] = useState<'drives' | 'cleaner' | 'analyzer'>('drives');
+  const [selectedDrivePath, setSelectedDrivePath] = useState('C:\\');
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [isLoadingDrives, setIsLoadingDrives] = useState(false);
 
@@ -38,14 +40,26 @@ export const App: React.FC = () => {
 
       {/* Main Content Body */}
       <main className="flex-1 overflow-hidden flex flex-col">
-        {currentTab === 'drives' ? (
+        {currentTab === 'drives' && (
           <DriveOverview
             drives={drives}
             isLoading={isLoadingDrives}
             onNavigateToCleaner={() => setCurrentTab('cleaner')}
+            onNavigateToAnalyzer={(path) => {
+              setSelectedDrivePath(path);
+              setCurrentTab('analyzer');
+            }}
           />
-        ) : (
+        )}
+        {currentTab === 'cleaner' && (
           <JunkCleaner onCleanSuccess={fetchDrives} />
+        )}
+        {currentTab === 'analyzer' && (
+          <FolderAnalyzer
+            drives={drives}
+            initialPath={selectedDrivePath}
+            onRefreshDrives={fetchDrives}
+          />
         )}
       </main>
 
@@ -56,7 +70,7 @@ export const App: React.FC = () => {
           <span>Ferrowipe Engine Ready</span>
         </div>
         <div className="flex items-center gap-4">
-          <span>NTFS / ReFS Native Optimizer</span>
+          <span>Multithreaded Windows Disk Optimizer</span>
           <span>MIT License</span>
         </div>
       </footer>
