@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
-import { Trash2, AlertTriangle, X, ShieldAlert, RotateCcw } from 'lucide-react';
-import { FolderItem } from '../types';
-import { formatBytes } from '../utils';
+import React, { useState, useEffect } from 'react';
+import { Trash2, AlertTriangle, ShieldAlert, RotateCcw } from 'lucide-react';
+import { FolderItem } from '@/types';
+import { formatBytes } from '@/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 
 interface FolderDeleteModalProps {
   isOpen: boolean;
@@ -18,120 +31,140 @@ export const FolderDeleteModal: React.FC<FolderDeleteModalProps> = ({
 }) => {
   const [permanent, setPermanent] = useState(false);
 
-  if (!isOpen || selectedFolders.length === 0) return null;
+  // Always reset to Safe Mode when opening modal
+  useEffect(() => {
+    if (isOpen) {
+      setPermanent(false);
+    }
+  }, [isOpen]);
 
   const totalBytes = selectedFolders.reduce((sum, f) => sum + f.size_bytes, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-      <div className="w-full max-w-lg bg-surface-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden p-6 space-y-5">
-        {/* Header */}
-        <div className="flex items-start justify-between">
+    <Dialog open={isOpen && selectedFolders.length > 0} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-400">
-              <Trash2 className="w-6 h-6" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-destructive/15 text-destructive border border-destructive/25">
+              <Trash2 className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Delete Selected Folders</h3>
-              <p className="text-xs text-slate-400">Free up space by removing selected directories</p>
+              <DialogTitle>Delete Selected Items</DialogTitle>
+              <DialogDescription>
+                Free up disk space by removing selected folders or files
+              </DialogDescription>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        </DialogHeader>
 
-        {/* Space Reclaim Summary */}
-        <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-center space-y-1">
-          <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-            Space to be Reclaimed
-          </span>
-          <div className="text-2xl font-black text-red-400 tracking-tight">
-            {formatBytes(totalBytes)}
+        <div className="space-y-4 py-1">
+          {/* Space Reclaim Summary */}
+          <div className="rounded-xl border bg-muted/40 p-4 text-center space-y-1">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Space to be Reclaimed
+            </p>
+            <div className="text-3xl font-bold tracking-tight text-destructive tabular-nums">
+              {formatBytes(totalBytes)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Across {selectedFolders.length} selected item{selectedFolders.length === 1 ? '' : 's'}
+            </p>
           </div>
-          <p className="text-xs text-slate-400">
-            Across {selectedFolders.length} selected item{selectedFolders.length === 1 ? '' : 's'}
-          </p>
-        </div>
 
-        {/* Selected Folders List */}
-        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-          <span className="text-xs font-semibold text-slate-300">Selected Folders & Files:</span>
-          <div className="space-y-1.5 pt-1">
-            {selectedFolders.map((f) => (
-              <div
-                key={f.id}
-                className="flex items-center justify-between text-xs px-3 py-2 rounded-lg bg-slate-950/60 border border-slate-800"
-              >
-                <div className="min-w-0 flex-1 pr-3">
-                  <p className="font-semibold text-slate-200 truncate">{f.name}</p>
-                  <p className="text-[10px] text-slate-500 font-mono truncate">{f.path}</p>
-                </div>
-                <span className="font-mono text-emerald-400 font-bold shrink-0">
-                  {formatBytes(f.size_bytes)}
-                </span>
+          {/* Selected Folders List */}
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Selected Paths</p>
+            <ScrollArea className="max-h-36 rounded-lg border bg-muted/20 p-2">
+              <div className="space-y-1.5">
+                {selectedFolders.map((f) => (
+                  <div
+                    key={f.id}
+                    className="flex items-center justify-between gap-3 rounded-md border bg-card/60 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-foreground truncate">{f.name}</p>
+                      <p className="text-[10px] text-muted-foreground font-mono truncate">
+                        {f.path}
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="font-mono tabular-nums shrink-0">
+                      {formatBytes(f.size_bytes)}
+                    </Badge>
+                  </div>
+                ))}
               </div>
-            ))}
+            </ScrollArea>
           </div>
-        </div>
 
-        {/* Deletion Mode Selector */}
-        <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-2">
-          <label className="flex items-center gap-2.5 cursor-pointer text-xs select-none">
-            <input
-              type="checkbox"
-              checked={permanent}
-              onChange={(e) => setPermanent(e.target.checked)}
-              className="rounded border-slate-700 text-red-600 focus:ring-red-500 w-4 h-4 bg-slate-900"
-            />
-            <span className="text-slate-200 font-medium">
-              Permanent Deletion (Bypass Recycle Bin)
-            </span>
-          </label>
-
-          <p className="text-[11px] text-slate-400 pl-6.5">
-            {permanent ? (
-              <span className="text-amber-400 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3 shrink-0" />
-                Files will be permanently deleted and cannot be restored from the Recycle Bin!
-              </span>
-            ) : (
-              <span className="text-emerald-400 flex items-center gap-1">
-                <RotateCcw className="w-3 h-3 shrink-0" />
-                Safe Mode: Folders will be moved to the Windows Recycle Bin so you can recover them if needed.
-              </span>
-            )}
-          </p>
-        </div>
-
-        {/* Built-in Protection Note */}
-        <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/40 border border-slate-800/80 text-xs text-slate-400">
-          <ShieldAlert className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <span>
-            <strong>Safety Shield:</strong> Ferrowipe automatically protects critical Windows operating system directories (like <code>C:\Windows</code> and system partitions).
-          </span>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/80 rounded-xl transition-all"
+          {/* Deletion Mode Selector */}
+          <div
+            className={`rounded-xl border p-3.5 transition-colors space-y-2 ${
+              permanent
+                ? 'border-destructive/40 bg-destructive/5'
+                : 'border-border bg-muted/30'
+            }`}
           >
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <label
+                  htmlFor="permanent-delete-switch"
+                  className="text-xs font-semibold text-foreground cursor-pointer"
+                >
+                  Permanent Deletion (Bypass Recycle Bin)
+                </label>
+                <p className="text-[11px] text-muted-foreground">
+                  {permanent
+                    ? 'Items will be permanently erased and cannot be restored.'
+                    : 'Safe Mode: Items are moved to the Windows Recycle Bin.'}
+                </p>
+              </div>
+              <Switch
+                id="permanent-delete-switch"
+                checked={permanent}
+                onCheckedChange={setPermanent}
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+              {permanent ? (
+                <span className="text-destructive flex items-center gap-1.5 font-medium">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Irreversible action — double-check paths above before continuing.
+                </span>
+              ) : (
+                <span className="text-primary flex items-center gap-1.5 font-medium">
+                  <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+                  Recoverable from Windows Recycle Bin if deleted by mistake.
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Safety Shield Note */}
+          <Alert className="bg-muted/20">
+            <ShieldAlert className="h-4 w-4 text-primary" />
+            <AlertTitle className="text-xs font-semibold">Built-in Safety Shield</AlertTitle>
+            <AlertDescription className="text-xs text-muted-foreground">
+              Critical Windows directories (such as <code className="font-mono">C:\Windows</code>{' '}
+              and root partitions) are automatically protected against deletion.
+            </AlertDescription>
+          </Alert>
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button variant="outline" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="destructive"
             onClick={() => onConfirm(permanent)}
-            className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 rounded-xl shadow-lg shadow-red-950/50 transition-all flex items-center gap-1.5"
+            className="gap-1.5"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="h-4 w-4" />
             {permanent ? 'Permanently Delete' : 'Move to Recycle Bin'}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };

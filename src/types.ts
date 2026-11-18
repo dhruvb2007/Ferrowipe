@@ -1,3 +1,5 @@
+export type NavTab = 'dashboard' | 'cleaner' | 'analyzer';
+
 export interface DriveInfo {
   mount_point: string;
   volume_name: string;
@@ -8,6 +10,12 @@ export interface DriveInfo {
   usage_percentage: number;
   drive_type: string;
   is_low_space: boolean;
+}
+
+export interface RecycleBinStat {
+  drive: string;
+  bytes: number;
+  items: number;
 }
 
 export interface JunkItem {
@@ -68,7 +76,6 @@ export interface CleanRequest {
   selected_item_ids: string[];
 }
 
-
 export interface FolderItem {
   id: string;
   name: string;
@@ -113,4 +120,25 @@ export interface DeleteFoldersReport {
   failed_paths: SkippedFile[];
   freed_bytes: number;
   duration_ms: number;
+}
+
+export interface AnalyzerNavigationRequest {
+  path: string;
+  mode?: 'tree' | 'deep_scan';
+  autoFullDisk?: boolean;
+  minSizeMb?: number;
+  nonce: number;
+}
+
+export interface CleanerQuickTrigger {
+  presetRuleIds?: string[];
+  autoScan?: boolean;
+  nonce: number;
+}
+
+export interface CleanerStatusSummary {
+  isScanning: boolean;
+  isCleaning: boolean;
+  reclaimableBytes: number;
+  reclaimableFiles: number;
 }

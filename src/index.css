@@ -3,9 +3,76 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 158 64% 38%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 94%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 94.5%;
+    --muted-foreground: 240 3.8% 44%;
+    --accent: 240 4.8% 93.5%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 89%;
+    --input: 240 5.9% 89%;
+    --ring: 158 64% 38%;
+    --radius: 0.65rem;
+    --sidebar-background: 0 0% 96.5%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 158 64% 38%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 91.5%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 240 5.9% 89%;
+  }
+
+  .dark {
+    --background: 240 10% 4.5%;
+    --foreground: 0 0% 96%;
+    --card: 240 8% 7.2%;
+    --card-foreground: 0 0% 96%;
+    --popover: 240 8% 7.5%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 158 64% 46%;
+    --primary-foreground: 158 80% 6%;
+    --secondary: 240 6% 13%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 240 6% 12%;
+    --muted-foreground: 240 5% 60%;
+    --accent: 240 6% 14.5%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 52%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 15.5%;
+    --input: 240 6% 15.5%;
+    --ring: 158 64% 46%;
+    --sidebar-background: 240 10% 5.6%;
+    --sidebar-foreground: 240 5% 84%;
+    --sidebar-primary: 158 64% 46%;
+    --sidebar-primary-foreground: 158 80% 6%;
+    --sidebar-accent: 240 6% 13%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 240 6% 13.5%;
+  }
+}
+
+@layer base {
   * {
+    @apply border-border;
     scrollbar-width: thin;
-    scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
   }
 
   ::-webkit-scrollbar {
@@ -18,11 +85,11 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.25);
+    background: hsl(var(--muted-foreground) / 0.22);
     border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(148, 163, 184, 0.4);
+    background: hsl(var(--muted-foreground) / 0.4);
   }
 }

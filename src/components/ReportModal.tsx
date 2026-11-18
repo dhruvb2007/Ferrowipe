@@ -1,7 +1,29 @@
-import React, { useState } from 'react';
-import { CheckCircle, AlertCircle, Copy, Check, X, FileText, Clock } from 'lucide-react';
-import { CleanReport } from '../types';
-import { formatBytes, formatDuration } from '../utils';
+import React, { useState, useMemo } from 'react';
+import {
+  CheckCircle2,
+  AlertCircle,
+  Copy,
+  Check,
+  FileText,
+  Clock,
+  Search,
+  RefreshCw,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { CleanReport } from '@/types';
+import { formatBytes, formatDuration } from '@/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface ReportModalProps {
   isOpen: boolean;
@@ -17,8 +39,21 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   onScanAgain,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [skippedFilter, setSkippedFilter] = useState('');
 
-  if (!isOpen || !report) return null;
+  const filteredSkipped = useMemo(() => {
+    if (!report) return [];
+    const q = skippedFilter.trim().toLowerCase();
+    if (!q) return report.skipped_files;
+    return report.skipped_files.filter(
+      (s) =>
+        s.path.toLowerCase().includes(q) ||
+        s.reason.toLowerCase().includes(q) ||
+        s.category_id.toLowerCase().includes(q)
+    );
+  }, [report, skippedFilter]);
+
+  if (!report) return null;
 
   const handleCopyReport = () => {
     const text = `Ferrowipe v0.1.0 - Cleaning Report
@@ -37,58 +72,59 @@ ${
 `;
     navigator.clipboard.writeText(text);
     setCopied(true);
+    toast.success('Cleaning report copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-      <div className="w-full max-w-2xl bg-surface-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-        {/* Header */}
-        <div className="p-6 border-b border-slate-800 bg-surface-950/60 flex items-center justify-between">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+        <DialogHeader>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
-              <CheckCircle className="w-6 h-6" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary border border-primary/25">
+              <CheckCircle2 className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">Cleaning Summary Report</h3>
-              <p className="text-xs text-slate-400">Cleanup execution finished successfully</p>
+              <DialogTitle>Cleaning Summary Report</DialogTitle>
+              <DialogDescription className="flex items-center gap-2 mt-0.5">
+                <span>Cleanup completed successfully</span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1 font-mono text-xs">
+                  <Clock className="h-3 w-3" />
+                  {formatDuration(report.duration_ms)}
+                </span>
+              </DialogDescription>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        </DialogHeader>
 
         {/* Hero Metrics */}
-        <div className="grid grid-cols-3 gap-3 p-6 bg-slate-900/40 border-b border-slate-800/80">
-          <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        <div className="grid grid-cols-3 gap-3 py-1">
+          <div className="rounded-xl border bg-muted/40 p-3.5 text-center">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Freed Space
-            </span>
-            <div className="text-2xl font-black text-emerald-400 mt-0.5">
+            </p>
+            <div className="text-2xl font-bold text-primary mt-1 tabular-nums">
               {formatBytes(report.freed_bytes)}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="rounded-xl border bg-muted/40 p-3.5 text-center">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Files Removed
-            </span>
-            <div className="text-2xl font-black text-slate-200 mt-0.5">
+            </p>
+            <div className="text-2xl font-bold text-foreground mt-1 tabular-nums">
               {report.removed_files.toLocaleString()}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-center">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="rounded-xl border bg-muted/40 p-3.5 text-center">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Skipped (Locked)
-            </span>
+            </p>
             <div
-              className={`text-2xl font-black mt-0.5 ${
-                report.skipped_files.length > 0 ? 'text-amber-400' : 'text-slate-400'
+              className={`text-2xl font-bold mt-1 tabular-nums ${
+                report.skipped_files.length > 0 ? 'text-amber-500' : 'text-muted-foreground'
               }`}
             >
               {report.skipped_files.length.toLocaleString()}
@@ -96,68 +132,93 @@ ${
           </div>
         </div>
 
-        {/* Skipped Items Section */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          <div className="flex items-center justify-between">
+        {/* Skipped Items Log */}
+        <div className="flex-1 min-h-0 flex flex-col space-y-2.5">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-slate-400" />
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Skipped Files Log ({report.skipped_files.length})
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Skipped Files Log
               </h4>
+              <Badge variant="secondary" className="text-[10px]">
+                {report.skipped_files.length}
+              </Badge>
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-slate-400">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Elapsed: {formatDuration(report.duration_ms)}</span>
-            </div>
+
+            {report.skipped_files.length > 0 && (
+              <div className="relative w-56">
+                <Search className="h-3.5 w-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <Input
+                  value={skippedFilter}
+                  onChange={(e) => setSkippedFilter(e.target.value)}
+                  placeholder="Filter skipped paths..."
+                  className="h-8 pl-8 text-xs"
+                />
+              </div>
+            )}
           </div>
 
           {report.skipped_files.length === 0 ? (
-            <div className="p-6 rounded-xl bg-slate-950/40 border border-slate-800/80 text-center text-xs text-slate-400">
-              <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80" />
-              <p className="font-semibold text-slate-300">Perfect Execution</p>
-              <p className="mt-0.5">Every single selected file was successfully deleted without any locks.</p>
+            <div className="rounded-xl border bg-muted/20 p-6 text-center space-y-1.5">
+              <CheckCircle2 className="h-8 w-8 text-primary mx-auto opacity-85" />
+              <p className="text-sm font-semibold text-foreground">Perfect Execution</p>
+              <p className="text-xs text-muted-foreground">
+                Every selected item was removed cleanly without any file lock conflicts.
+              </p>
             </div>
           ) : (
-            <div className="border border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-800/80 bg-slate-950/50">
-              {report.skipped_files.map((item, idx) => (
-                <div key={idx} className="p-3 text-xs flex items-start gap-3">
-                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-mono text-slate-300 truncate">{item.path}</p>
-                    <p className="text-amber-400/90 text-[11px] mt-0.5">{item.reason}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <ScrollArea className="h-52 rounded-xl border bg-muted/20">
+              <div className="divide-y divide-border">
+                {filteredSkipped.length === 0 ? (
+                  <p className="p-6 text-center text-xs text-muted-foreground">
+                    No skipped files match "{skippedFilter}".
+                  </p>
+                ) : (
+                  filteredSkipped.map((item, idx) => (
+                    <div key={idx} className="p-3 text-xs flex items-start gap-2.5">
+                      <AlertCircle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-mono text-foreground truncate" title={item.path}>
+                          {item.path}
+                        </p>
+                        <p className="text-amber-500/90 text-[11px] mt-0.5">{item.reason}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-surface-950/80 flex items-center justify-between">
-          <button
-            onClick={handleCopyReport}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-700/80 transition-all"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? 'Copied to Clipboard!' : 'Copy Summary'}</span>
-          </button>
+        <DialogFooter className="flex-row items-center justify-between sm:justify-between gap-2 pt-2 border-t">
+          <Button variant="outline" size="sm" onClick={handleCopyReport} className="gap-1.5">
+            {copied ? (
+              <Check className="h-3.5 w-3.5 text-primary" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            {copied ? 'Copied!' : 'Copy Summary'}
+          </Button>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
-            >
+            <Button variant="ghost" size="sm" onClick={onClose}>
               Close
-            </button>
-            <button
-              onClick={onScanAgain}
-              className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-md transition-all"
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                onClose();
+                onScanAgain();
+              }}
+              className="gap-1.5"
             >
+              <RefreshCw className="h-3.5 w-3.5" />
               Scan Again
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
