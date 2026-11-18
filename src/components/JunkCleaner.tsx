@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   FolderArchive,
   Trash2,
@@ -18,10 +19,21 @@ import {
   ChevronsUpDown,
   MapPin,
   X,
+  Bot,
+  Code2,
+  Terminal,
+  Cpu,
+  MessageSquare,
+  Music,
+  Gamepad2,
+  Smartphone,
+  Boxes,
+  Radar,
+  Copy,
+  Lock,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { toast } from 'sonner';
 import {
   CategorySummary,
   CleanerQuickTrigger,
@@ -29,6 +41,8 @@ import {
   CleanProgress,
   CleanReport,
   CleanRequest,
+  DetectedCleanupRule,
+  JunkItem,
   ScanProgress,
   ScanResult,
 } from '@/types';
@@ -36,137 +50,87 @@ import { formatBytes, formatDuration } from '@/utils';
 import { cn } from '@/lib/utils';
 import { ConfirmationModal } from './ConfirmationModal';
 import { ReportModal } from './ReportModal';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
-import { Progress } from '@/components/ui/progress';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  ObsidianBadge,
+  ObsidianButton,
+  ObsidianCheckbox,
+  ObsidianProgress,
+} from '@/components/obsidian/ObsidianPrimitives';
+import { obsidianToast } from '@/components/obsidian/ObsidianToast';
 
 interface JunkCleanerProps {
+  detectedRules: DetectedCleanupRule[];
+  onRefreshRules?: () => void;
   quickTrigger?: CleanerQuickTrigger | null;
   onCleanSuccess?: () => void;
   onStatusChange?: (status: CleanerStatusSummary) => void;
 }
 
-interface RuleDef {
-  id: string;
-  name: string;
-  desc: string;
-  group: 'Temp' | 'Browser' | 'System';
-  icon: React.ReactNode;
+function getRuleIcon(iconKey: string): React.ReactNode {
+  switch (iconKey) {
+    case 'user_temp':
+      return <FolderArchive className="h-4 w-4 text-[var(--obs-accent)] shrink-0" />;
+    case 'windows_temp':
+      return <FolderArchive className="h-4 w-4 text-sky-400 shrink-0" />;
+    case 'recycle_bin':
+      return <Trash2 className="h-4 w-4 text-[var(--obs-danger)] shrink-0" />;
+    case 'browser_chrome':
+      return <Globe className="h-4 w-4 text-amber-400 shrink-0" />;
+    case 'browser_edge':
+      return <Globe className="h-4 w-4 text-sky-400 shrink-0" />;
+    case 'browser_firefox':
+      return <Globe className="h-4 w-4 text-orange-400 shrink-0" />;
+    case 'browser_brave':
+      return <Globe className="h-4 w-4 text-amber-500 shrink-0" />;
+    case 'browser_opera':
+      return <Globe className="h-4 w-4 text-rose-400 shrink-0" />;
+    case 'browser_vivaldi':
+      return <Globe className="h-4 w-4 text-red-400 shrink-0" />;
+    case 'ai_agent':
+      return <Bot className="h-4 w-4 text-violet-400 shrink-0" />;
+    case 'ai_ide':
+      return <Bot className="h-4 w-4 text-fuchsia-400 shrink-0" />;
+    case 'android_studio':
+      return <Smartphone className="h-4 w-4 text-emerald-400 shrink-0" />;
+    case 'gradle':
+      return <Boxes className="h-4 w-4 text-teal-400 shrink-0" />;
+    case 'ide':
+    case 'app_vscode':
+      return <Code2 className="h-4 w-4 text-sky-400 shrink-0" />;
+    case 'dev_cache':
+      return <Terminal className="h-4 w-4 text-emerald-400 shrink-0" />;
+    case 'app_discord':
+      return <MessageSquare className="h-4 w-4 text-indigo-400 shrink-0" />;
+    case 'app_spotify':
+      return <Music className="h-4 w-4 text-green-400 shrink-0" />;
+    case 'app_steam':
+      return <Gamepad2 className="h-4 w-4 text-blue-400 shrink-0" />;
+    case 'windows_update':
+      return <RefreshCw className="h-4 w-4 text-violet-400 shrink-0" />;
+    case 'gpu_cache':
+      return <Cpu className="h-4 w-4 text-lime-400 shrink-0" />;
+    case 'thumb_cache':
+      return <Image className="h-4 w-4 text-teal-400 shrink-0" />;
+    case 'crash_dumps':
+      return <Flame className="h-4 w-4 text-rose-400 shrink-0" />;
+    case 'prefetch_logs':
+      return <FileCode className="h-4 w-4 text-indigo-400 shrink-0" />;
+    default:
+      return <Sparkles className="h-4 w-4 text-[var(--obs-accent)] shrink-0" />;
+  }
 }
 
-const ALL_RULES: RuleDef[] = [
-  {
-    id: 'user_temp',
-    name: 'User Temp Files',
-    desc: 'Temporary user cache (%TEMP%)',
-    group: 'Temp',
-    icon: <FolderArchive className="h-4 w-4 text-emerald-500" />,
-  },
-  {
-    id: 'windows_temp',
-    name: 'Windows Temp',
-    desc: 'System temp folder (C:\\Windows\\Temp)',
-    group: 'Temp',
-    icon: <FolderArchive className="h-4 w-4 text-cyan-500" />,
-  },
-  {
-    id: 'recycle_bin',
-    name: 'Recycle Bin',
-    desc: 'Per-drive Windows Recycle Bins',
-    group: 'Temp',
-    icon: <Trash2 className="h-4 w-4 text-rose-500" />,
-  },
-  {
-    id: 'browser_chrome',
-    name: 'Google Chrome Cache',
-    desc: 'Chrome web cache & code cache',
-    group: 'Browser',
-    icon: <Globe className="h-4 w-4 text-amber-500" />,
-  },
-  {
-    id: 'browser_edge',
-    name: 'Microsoft Edge Cache',
-    desc: 'Edge web cache & GPU cache',
-    group: 'Browser',
-    icon: <Globe className="h-4 w-4 text-blue-500" />,
-  },
-  {
-    id: 'browser_firefox',
-    name: 'Firefox Cache',
-    desc: 'Mozilla Firefox profile cache2',
-    group: 'Browser',
-    icon: <Globe className="h-4 w-4 text-orange-500" />,
-  },
-  {
-    id: 'browser_brave',
-    name: 'Brave Browser Cache',
-    desc: 'Brave web & renderer cache',
-    group: 'Browser',
-    icon: <Globe className="h-4 w-4 text-amber-600" />,
-  },
-  {
-    id: 'windows_update',
-    name: 'Windows Update Cache',
-    desc: 'SoftwareDistribution\\Download',
-    group: 'System',
-    icon: <RefreshCw className="h-4 w-4 text-purple-500" />,
-  },
-  {
-    id: 'thumb_cache',
-    name: 'Thumbnails & Icon Cache',
-    desc: 'Explorer thumbnail & icon DBs',
-    group: 'System',
-    icon: <Image className="h-4 w-4 text-teal-500" />,
-  },
-  {
-    id: 'crash_dumps',
-    name: 'Crash Dumps & WER',
-    desc: 'Memory minidumps & error reports',
-    group: 'System',
-    icon: <Flame className="h-4 w-4 text-rose-500" />,
-  },
-  {
-    id: 'prefetch_logs',
-    name: 'Prefetch & Old Logs',
-    desc: 'C:\\Windows\\Prefetch & CBS logs',
-    group: 'System',
-    icon: <FileCode className="h-4 w-4 text-indigo-500" />,
-  },
-];
-
-const RULE_PRESETS: { id: string; label: string; ruleIds: string[] }[] = [
-  { id: 'all', label: 'All Safe Junk', ruleIds: ALL_RULES.map((r) => r.id) },
-  {
-    id: 'quick',
-    label: 'Quick Clean',
-    ruleIds: ['user_temp', 'windows_temp', 'recycle_bin', 'thumb_cache'],
-  },
-  {
-    id: 'browsers',
-    label: 'Browsers Only',
-    ruleIds: ['browser_chrome', 'browser_edge', 'browser_firefox', 'browser_brave'],
-  },
-  {
-    id: 'system',
-    label: 'System & Logs',
-    ruleIds: ['windows_temp', 'windows_update', 'crash_dumps', 'prefetch_logs'],
-  },
-];
-
 export const JunkCleaner: React.FC<JunkCleanerProps> = ({
+  detectedRules,
+  onRefreshRules,
   quickTrigger,
   onCleanSuccess,
   onStatusChange,
 }) => {
-  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>(ALL_RULES.map((r) => r.id));
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isRedetecting, setIsRedetecting] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [cleanProgress, setCleanProgress] = useState<CleanProgress | null>(null);
 
@@ -179,9 +143,85 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
   const [showReportModal, setShowReportModal] = useState(false);
   const [cleanReport, setCleanReport] = useState<CleanReport | null>(null);
 
+  const hasInitializedSelectionRef = useRef(false);
   const lastTriggerNonceRef = useRef<number | null>(null);
 
-  // Tauri Event Listeners
+  // Sync selected rules when detectedRules arrives or refreshes
+  useEffect(() => {
+    if (detectedRules.length === 0) return;
+    const validIds = new Set(detectedRules.map((r) => r.id));
+
+    if (!hasInitializedSelectionRef.current) {
+      hasInitializedSelectionRef.current = true;
+      setSelectedRuleIds(detectedRules.map((r) => r.id));
+    } else {
+      setSelectedRuleIds((prev) => prev.filter((id) => validIds.has(id)));
+    }
+  }, [detectedRules]);
+
+  // Dynamic presets built strictly from what is installed on this PC
+  const dynamicPresets = useMemo(() => {
+    const allIds = detectedRules.map((r) => r.id);
+    const validSet = new Set(allIds);
+    const presets: { id: string; label: string; ruleIds: string[] }[] = [];
+
+    if (allIds.length > 0) {
+      presets.push({ id: 'all', label: 'All Detected', ruleIds: allIds });
+    }
+
+    const quickIds = ['user_temp', 'windows_temp', 'recycle_bin', 'thumb_cache'].filter((id) =>
+      validSet.has(id)
+    );
+    if (quickIds.length > 0) {
+      presets.push({ id: 'quick', label: 'Quick Clean', ruleIds: quickIds });
+    }
+
+    const browserIds = detectedRules.filter((r) => r.group === 'Browser').map((r) => r.id);
+    if (browserIds.length > 0) {
+      presets.push({
+        id: 'browsers',
+        label: `Browsers (${browserIds.length})`,
+        ruleIds: browserIds,
+      });
+    }
+
+    const aiIds = detectedRules.filter((r) => r.group === 'AI & Agents').map((r) => r.id);
+    if (aiIds.length > 0) {
+      presets.push({
+        id: 'ai',
+        label: `AI & Agents (${aiIds.length})`,
+        ruleIds: aiIds,
+      });
+    }
+
+    const ideIds = detectedRules.filter((r) => r.group === 'IDEs & Dev').map((r) => r.id);
+    if (ideIds.length > 0) {
+      presets.push({
+        id: 'dev',
+        label: `IDEs & Dev (${ideIds.length})`,
+        ruleIds: ideIds,
+      });
+    }
+
+    const appIds = detectedRules.filter((r) => r.group === 'Apps').map((r) => r.id);
+    if (appIds.length > 0) {
+      presets.push({
+        id: 'apps',
+        label: `Apps (${appIds.length})`,
+        ruleIds: appIds,
+      });
+    }
+
+    const systemIds = detectedRules
+      .filter((r) => r.group === 'System' || r.id === 'windows_temp')
+      .map((r) => r.id);
+    if (systemIds.length > 0) {
+      presets.push({ id: 'system', label: 'System & GPU', ruleIds: systemIds });
+    }
+
+    return presets;
+  }, [detectedRules]);
+
   useEffect(() => {
     let unlistenScan: UnlistenFn | undefined;
     let unlistenClean: UnlistenFn | undefined;
@@ -195,7 +235,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
           setCleanProgress(event.payload);
         });
       } catch {
-        // Non-Tauri browser preview
+        // Browser preview without Tauri runtime
       }
     };
 
@@ -209,7 +249,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
 
   const runScanWithRules = useCallback(async (ruleIds: string[]) => {
     if (ruleIds.length === 0) {
-      toast.warning('Select at least one target category to scan');
+      obsidianToast.warning('Select at least one target category to scan');
       return;
     }
 
@@ -232,49 +272,57 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
       setSelectedItemIds(itemIds);
 
       const initExpanded = new Set<string>();
-      result.categories.slice(0, 2).forEach((c) => initExpanded.add(c.category_id));
+      result.categories.slice(0, 3).forEach((c) => initExpanded.add(c.category_id));
       setExpandedCategories(initExpanded);
 
       if (result.total_reclaimable_bytes > 0) {
-        toast.success(
-          `Found ${formatBytes(result.total_reclaimable_bytes)} across ${result.total_reclaimable_files.toLocaleString()} items in ${formatDuration(result.scan_duration_ms)}`
+        obsidianToast.success(
+          `Found ${formatBytes(result.total_reclaimable_bytes)} across ${result.total_reclaimable_files.toLocaleString()} items`,
+          { description: `Completed in ${formatDuration(result.scan_duration_ms)}` }
         );
       } else {
-        toast.info('System is already clean for the selected targets');
+        obsidianToast.info('System is already clean for the selected targets');
       }
     } catch (err) {
       console.error('Scan failed:', err);
-      toast.error(`Scan failed: ${String(err)}`);
+      obsidianToast.error('Scan failed', { description: String(err) });
     } finally {
       setIsScanning(false);
     }
   }, []);
 
-  // Handle quick triggers from Dashboard or Header
   useEffect(() => {
-    if (!quickTrigger) return;
+    if (!quickTrigger || detectedRules.length === 0) return;
     if (lastTriggerNonceRef.current === quickTrigger.nonce) return;
     lastTriggerNonceRef.current = quickTrigger.nonce;
+    hasInitializedSelectionRef.current = true;
 
-    const targetRules =
+    const validSet = new Set(detectedRules.map((r) => r.id));
+    const filtered =
       quickTrigger.presetRuleIds && quickTrigger.presetRuleIds.length > 0
-        ? quickTrigger.presetRuleIds
-        : ALL_RULES.map((r) => r.id);
+        ? quickTrigger.presetRuleIds.filter((id) => validSet.has(id))
+        : detectedRules.map((r) => r.id);
 
+    const targetRules = filtered.length > 0 ? filtered : detectedRules.map((r) => r.id);
     setSelectedRuleIds(targetRules);
     if (quickTrigger.autoScan && !isScanning && !isCleaning) {
       runScanWithRules(targetRules);
     }
-  }, [quickTrigger, isScanning, isCleaning, runScanWithRules]);
+  }, [quickTrigger, detectedRules, isScanning, isCleaning, runScanWithRules]);
 
-  // Calculate live selected reclaimable space
-  const { selectedBytes, selectedFiles, selectedCategories } = useMemo(() => {
+  const { selectedBytes, selectedFiles, selectedCategories, selectedJunkItems } = useMemo(() => {
     if (!scanResult) {
-      return { selectedBytes: 0, selectedFiles: 0, selectedCategories: [] as string[] };
+      return {
+        selectedBytes: 0,
+        selectedFiles: 0,
+        selectedCategories: [] as string[],
+        selectedJunkItems: [] as JunkItem[],
+      };
     }
     let bytes = 0;
     let files = 0;
     const catNamesSet = new Set<string>();
+    const items: JunkItem[] = [];
 
     scanResult.categories.forEach((cat) => {
       let catHasSelected = false;
@@ -283,21 +331,20 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
           bytes += item.size_bytes;
           files += item.file_count;
           catHasSelected = true;
+          items.push(item);
         }
       });
-      if (catHasSelected) {
-        catNamesSet.add(cat.name);
-      }
+      if (catHasSelected) catNamesSet.add(cat.name);
     });
 
     return {
       selectedBytes: bytes,
       selectedFiles: files,
       selectedCategories: Array.from(catNamesSet),
+      selectedJunkItems: items,
     };
   }, [scanResult, selectedItemIds]);
 
-  // Report live status back to App / Sidebar
   useEffect(() => {
     onStatusChange?.({
       isScanning,
@@ -314,10 +361,21 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
   };
 
   const toggleSelectAllRules = () => {
-    if (selectedRuleIds.length === ALL_RULES.length) {
+    if (selectedRuleIds.length === detectedRules.length) {
       setSelectedRuleIds([]);
     } else {
-      setSelectedRuleIds(ALL_RULES.map((r) => r.id));
+      setSelectedRuleIds(detectedRules.map((r) => r.id));
+    }
+  };
+
+  const handleRedetectTargets = async () => {
+    if (!onRefreshRules) return;
+    setIsRedetecting(true);
+    try {
+      await Promise.resolve(onRefreshRules());
+      obsidianToast.success('Refreshed installed browsers, AI agents & IDE targets');
+    } finally {
+      window.setTimeout(() => setIsRedetecting(false), 300);
     }
   };
 
@@ -326,7 +384,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
   const handleCancelScan = async () => {
     try {
       await invoke('cancel_scan');
-      toast.info('Scan cancellation requested');
+      obsidianToast.info('Scan cancellation requested');
     } catch (err) {
       console.error('Failed to cancel scan:', err);
     }
@@ -335,7 +393,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
   const handleCancelClean = async () => {
     try {
       await invoke('cancel_clean');
-      toast.info('Cleanup cancellation requested');
+      obsidianToast.info('Cleanup cancellation requested');
     } catch (err) {
       console.error('Failed to cancel clean:', err);
     }
@@ -344,7 +402,6 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
   const toggleCategorySelection = (category: CategorySummary) => {
     const newSelected = new Set(selectedItemIds);
     const allSelected = category.items.every((it) => newSelected.has(it.id));
-
     if (allSelected) {
       category.items.forEach((it) => newSelected.delete(it.id));
     } else {
@@ -355,21 +412,15 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
 
   const toggleItemSelection = (itemId: string) => {
     const newSelected = new Set(selectedItemIds);
-    if (newSelected.has(itemId)) {
-      newSelected.delete(itemId);
-    } else {
-      newSelected.add(itemId);
-    }
+    if (newSelected.has(itemId)) newSelected.delete(itemId);
+    else newSelected.add(itemId);
     setSelectedItemIds(newSelected);
   };
 
   const toggleCategoryExpand = (catId: string) => {
     const newExpanded = new Set(expandedCategories);
-    if (newExpanded.has(catId)) {
-      newExpanded.delete(catId);
-    } else {
-      newExpanded.add(catId);
-    }
+    if (newExpanded.has(catId)) newExpanded.delete(catId);
+    else newExpanded.add(catId);
     setExpandedCategories(newExpanded);
   };
 
@@ -414,6 +465,21 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
       .filter((cat) => cat.items.length > 0);
   }, [scanResult, resultSearch]);
 
+  const handleCopySelectedPaths = () => {
+    const paths = selectedJunkItems.map((it) => it.path).filter(Boolean);
+    if (paths.length === 0) return;
+    navigator.clipboard.writeText(paths.join('\n'));
+    obsidianToast.success(
+      `Copied ${paths.length} selected path${paths.length === 1 ? '' : 's'} to clipboard`
+    );
+  };
+
+  const handleCopySinglePath = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(path);
+    obsidianToast.success('Path copied to clipboard', { description: path });
+  };
+
   const handleLocateItem = async (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -422,7 +488,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
       try {
         await invoke('open_in_explorer', { path });
       } catch {
-        toast.error('Could not open path in File Explorer');
+        obsidianToast.error('Could not open path in File Explorer');
       }
     }
   };
@@ -452,11 +518,13 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
       setShowReportModal(true);
       setScanResult(null);
       setSelectedItemIds(new Set());
-      toast.success(`Freed ${formatBytes(report.freed_bytes)} across ${report.removed_files.toLocaleString()} files`);
+      obsidianToast.success(
+        `Freed ${formatBytes(report.freed_bytes)} across ${report.removed_files.toLocaleString()} files`
+      );
       if (onCleanSuccess) onCleanSuccess();
     } catch (err) {
       console.error('Cleaning failed:', err);
-      toast.error(`Cleanup failed: ${String(err)}`);
+      obsidianToast.error('Cleanup failed', { description: String(err) });
     } finally {
       setIsCleaning(false);
     }
@@ -464,9 +532,9 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
 
   const activePresetId = useMemo(() => {
     const sortedSel = [...selectedRuleIds].sort().join(',');
-    const found = RULE_PRESETS.find((p) => [...p.ruleIds].sort().join(',') === sortedSel);
+    const found = dynamicPresets.find((p) => [...p.ruleIds].sort().join(',') === sortedSel);
     return found?.id || null;
-  }, [selectedRuleIds]);
+  }, [selectedRuleIds, dynamicPresets]);
 
   const cleanPct = useMemo(() => {
     if (!cleanProgress || cleanProgress.total_target_bytes <= 0) return 0;
@@ -485,6 +553,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
         totalBytes={selectedBytes}
         totalFiles={selectedFiles}
         categoryNames={selectedCategories}
+        selectedItems={selectedJunkItems}
       />
 
       <ReportModal
@@ -494,308 +563,354 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
         onScanAgain={handleStartScan}
       />
 
-      <ScrollArea className="flex-1 h-full">
-        <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div className="flex-1 obs-scroll h-full">
+        <div className="p-6 space-y-5 max-w-7xl mx-auto">
           {/* Scanning Progress Card */}
           {isScanning && (
-            <Card className="border-primary/40 shadow-md">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-lg bg-primary/15 text-primary flex items-center justify-center">
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-foreground">
-                        Scanning System Storage...
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Traversing selected junk targets across parallel worker threads
-                      </p>
-                    </div>
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="obs-card p-5 space-y-4 ring-1 ring-[var(--obs-accent-border)]"
+            >
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-xl bg-[var(--obs-accent-soft)] text-[var(--obs-accent)] flex items-center justify-center">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
                   </div>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleCancelScan}
-                    className="h-8 text-xs gap-1.5"
-                  >
-                    <XCircle className="h-3.5 w-3.5" />
-                    Cancel Scan
-                  </Button>
+                  <div>
+                    <h3 className="text-sm font-semibold text-[var(--obs-fg)]">
+                      Scanning System Storage...
+                    </h3>
+                    <p className="text-xs text-[var(--obs-text-muted)]">
+                      Traversing detected caches &amp; temp folders across parallel worker threads
+                    </p>
+                  </div>
                 </div>
+                <ObsidianButton variant="danger" size="sm" onClick={handleCancelScan}>
+                  <XCircle className="h-3.5 w-3.5" />
+                  Cancel Scan
+                </ObsidianButton>
+              </div>
 
-                {/* Indeterminate animated bar */}
-                <div className="h-2 w-full bg-secondary rounded-full overflow-hidden relative">
-                  <div className="h-full w-1/3 bg-primary rounded-full animate-indeterminate-bar" />
-                </div>
+              <div className="h-2 w-full bg-[var(--obs-muted)] rounded-full overflow-hidden relative">
+                <div className="h-full w-1/3 bg-[var(--obs-accent)] rounded-full animate-indeterminate-bar" />
+              </div>
 
-                <div className="flex items-center justify-between gap-4 text-xs">
-                  <span className="font-mono text-muted-foreground truncate">
-                    {scanProgress?.current_path || 'Scanning...'}
-                  </span>
-                  <span className="font-semibold text-primary font-mono tabular-nums shrink-0">
-                    {formatBytes(scanProgress?.scanned_bytes || 0)} (
-                    {(scanProgress?.scanned_files || 0).toLocaleString()} items)
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
+              <div className="flex items-center justify-between gap-4 text-xs">
+                <span className="font-mono text-[var(--obs-text-muted)] truncate">
+                  {scanProgress?.current_path || 'Scanning...'}
+                </span>
+                <span className="font-semibold text-[var(--obs-accent)] font-mono tabular-nums shrink-0">
+                  {formatBytes(scanProgress?.scanned_bytes || 0)} (
+                  {(scanProgress?.scanned_files || 0).toLocaleString()} items)
+                </span>
+              </div>
+            </motion.div>
           )}
 
           {/* Cleaning Progress Card */}
           {isCleaning && (
-            <Card className="border-destructive/40 shadow-md">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-lg bg-destructive/15 text-destructive flex items-center justify-center">
-                      <Trash2 className="h-4 w-4 animate-pulse" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-foreground">
-                        Purging Selected Junk Files...
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Safely reclaiming space while skipping locked system files
-                      </p>
-                    </div>
+            <motion.div
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="obs-card p-5 space-y-4 ring-1 ring-[var(--obs-danger)]/40"
+            >
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-xl bg-[var(--obs-danger-soft)] text-[var(--obs-danger)] flex items-center justify-center">
+                    <Trash2 className="h-4 w-4 animate-pulse" />
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCancelClean}
-                    className="h-8 text-xs gap-1.5 border-destructive/40 text-destructive hover:bg-destructive/10"
-                  >
-                    <XCircle className="h-3.5 w-3.5" />
-                    Stop
-                  </Button>
+                  <div>
+                    <h3 className="text-sm font-semibold text-[var(--obs-fg)]">
+                      Purging Selected Junk Files...
+                    </h3>
+                    <p className="text-xs text-[var(--obs-text-muted)]">
+                      Safely reclaiming space while protecting personal data &amp; locked files
+                    </p>
+                  </div>
                 </div>
+                <ObsidianButton variant="control" size="sm" onClick={handleCancelClean}>
+                  <XCircle className="h-3.5 w-3.5 text-[var(--obs-danger)]" />
+                  Stop
+                </ObsidianButton>
+              </div>
 
-                <Progress
-                  value={cleanPct > 0 ? cleanPct : 15}
-                  className="h-2"
-                  indicatorClassName="bg-destructive"
-                />
+              <ObsidianProgress value={cleanPct > 0 ? cleanPct : 15} tone="danger" />
 
-                <div className="flex items-center justify-between gap-4 text-xs">
-                  <span className="font-mono text-muted-foreground truncate">
-                    {cleanProgress?.current_path || 'Purging...'}
-                  </span>
-                  <span className="font-semibold text-destructive font-mono tabular-nums shrink-0">
-                    Freed {formatBytes(cleanProgress?.freed_bytes || 0)} (
-                    {(cleanProgress?.cleaned_files || 0).toLocaleString()} files)
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
+              <div className="flex items-center justify-between gap-4 text-xs">
+                <span className="font-mono text-[var(--obs-text-muted)] truncate">
+                  {cleanProgress?.current_path || 'Purging...'}
+                </span>
+                <span className="font-semibold text-[var(--obs-danger)] font-mono tabular-nums shrink-0">
+                  Freed {formatBytes(cleanProgress?.freed_bytes || 0)} (
+                  {(cleanProgress?.cleaned_files || 0).toLocaleString()} files)
+                </span>
+              </div>
+            </motion.div>
           )}
 
-          {/* Phase A: Target Selection */}
+          {/* Phase A: Dynamic System-Detected Target Selection */}
           {!scanResult && !isScanning && !isCleaning && (
             <div className="space-y-5">
-              {/* Presets & Scan Action Bar */}
+              {/* Auto-Detection Banner */}
+              <div className="obs-card px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs text-[var(--obs-text-muted)]">
+                  <Radar className="h-3.5 w-3.5 text-[var(--obs-accent)] shrink-0" />
+                  <span>
+                    Auto-detected{' '}
+                    <strong className="text-[var(--obs-fg)] font-semibold">
+                      {detectedRules.length}
+                    </strong>{' '}
+                    installed target{detectedRules.length === 1 ? '' : 's'} (browsers, AI agents,
+                    IDEs &amp; system caches) — software you don&apos;t have is hidden.
+                  </span>
+                </div>
+                {onRefreshRules && (
+                  <ObsidianButton
+                    variant="ghost"
+                    size="xs"
+                    onClick={handleRedetectTargets}
+                    disabled={isRedetecting}
+                  >
+                    <RefreshCw className={cn('h-3 w-3', isRedetecting && 'animate-spin')} />
+                    Re-detect
+                  </ObsidianButton>
+                )}
+              </div>
+
+              {/* Dynamic Presets & Scan Action Bar */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-xs font-medium text-muted-foreground mr-1">Presets:</span>
-                  {RULE_PRESETS.map((preset) => (
-                    <Button
-                      key={preset.id}
-                      size="sm"
-                      variant={activePresetId === preset.id ? 'secondary' : 'outline'}
-                      onClick={() => setSelectedRuleIds(preset.ruleIds)}
-                      className={cn(
-                        'h-7 text-xs px-2.5',
-                        activePresetId === preset.id &&
-                          'border-primary/40 bg-primary/10 text-primary hover:bg-primary/15'
-                      )}
-                    >
-                      {preset.label}
-                    </Button>
-                  ))}
-                  <Button
-                    size="sm"
+                  <span className="text-xs font-medium text-[var(--obs-text-muted)] mr-1">
+                    Presets:
+                  </span>
+                  {dynamicPresets.map((preset) => {
+                    const active = activePresetId === preset.id;
+                    return (
+                      <ObsidianButton
+                        key={preset.id}
+                        size="xs"
+                        variant={active ? 'control' : 'ghost'}
+                        onClick={() => setSelectedRuleIds(preset.ruleIds)}
+                        className={cn(
+                          active && 'ring-1 ring-[var(--obs-accent-border)] text-[var(--obs-accent)]'
+                        )}
+                      >
+                        {preset.label}
+                      </ObsidianButton>
+                    );
+                  })}
+                  <ObsidianButton
+                    size="xs"
                     variant="ghost"
                     onClick={toggleSelectAllRules}
-                    className="h-7 text-xs px-2 text-muted-foreground"
+                    disabled={detectedRules.length === 0}
                   >
-                    {selectedRuleIds.length === ALL_RULES.length ? 'Clear All' : 'Select All'}
-                  </Button>
+                    {selectedRuleIds.length === detectedRules.length && detectedRules.length > 0
+                      ? 'Clear All'
+                      : 'Select All'}
+                  </ObsidianButton>
                 </div>
 
-                <div className="flex items-center gap-3 shrink-0">
-                  <Badge variant="outline" className="font-mono text-xs h-7 px-2.5">
-                    {selectedRuleIds.length} / {ALL_RULES.length} selected
-                  </Badge>
-                  <Button
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <ObsidianBadge tone="neutral" className="font-mono py-1.5 px-2.5 text-[11px]">
+                    {selectedRuleIds.length} / {detectedRules.length} selected
+                  </ObsidianBadge>
+                  <ObsidianButton
+                    variant="accent"
+                    size="md"
                     onClick={handleStartScan}
                     disabled={selectedRuleIds.length === 0}
-                    className="h-9 gap-2 text-xs font-semibold shadow-sm"
                   >
                     <Play className="h-3.5 w-3.5 fill-current" />
                     Scan Selected Targets
-                  </Button>
+                  </ObsidianButton>
                 </div>
               </div>
 
-              {/* Rules Selection Grid */}
+              {/* Dynamic Rules Selection Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {ALL_RULES.map((rule) => {
+                {detectedRules.map((rule) => {
                   const isChecked = selectedRuleIds.includes(rule.id);
                   return (
-                    <Card
+                    <div
                       key={rule.id}
                       onClick={() => toggleRule(rule.id)}
                       className={cn(
-                        'cursor-pointer transition-all select-none',
+                        'obs-card p-4 flex items-start gap-3 cursor-pointer transition-all select-none',
                         isChecked
-                          ? 'border-primary/45 bg-card shadow-sm'
-                          : 'bg-card/50 hover:bg-card hover:border-border opacity-70 hover:opacity-100'
+                          ? 'ring-1 ring-[var(--obs-accent-border)]'
+                          : 'opacity-65 hover:opacity-100'
                       )}
                     >
-                      <CardContent className="p-4 flex items-start gap-3">
-                        <Checkbox
-                          checked={isChecked}
-                          onCheckedChange={() => toggleRule(rule.id)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="mt-0.5"
-                        />
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              {rule.icon}
-                              <h4 className="text-xs font-semibold text-foreground truncate">
-                                {rule.name}
-                              </h4>
-                            </div>
-                            <Badge
-                              variant="secondary"
-                              className="text-[9px] px-1.5 py-0 h-4 font-normal shrink-0"
-                            >
-                              {rule.group}
-                            </Badge>
+                      <ObsidianCheckbox
+                        checked={isChecked}
+                        onChange={() => toggleRule(rule.id)}
+                        stopPropagation
+                        className="mt-0.5"
+                      />
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {getRuleIcon(rule.icon_key)}
+                            <h4 className="text-xs font-semibold text-[var(--obs-fg)] truncate">
+                              {rule.name}
+                            </h4>
                           </div>
-                          <p className="text-[11px] text-muted-foreground truncate">{rule.desc}</p>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {rule.profile_count > 1 && (
+                              <ObsidianBadge tone="accent" className="font-mono text-[9px]">
+                                {rule.profile_count}
+                              </ObsidianBadge>
+                            )}
+                            <ObsidianBadge tone="neutral" className="text-[9px]">
+                              {rule.group}
+                            </ObsidianBadge>
+                          </div>
                         </div>
-                      </CardContent>
-                    </Card>
+                        <p
+                          className="text-[11px] text-[var(--obs-text-muted)] line-clamp-2 leading-snug"
+                          title={rule.description}
+                        >
+                          {rule.description}
+                        </p>
+                        {rule.safe_note && (
+                          <p className="text-[10px] text-[var(--obs-success)] flex items-center gap-1 truncate">
+                            <Lock className="h-2.5 w-2.5 shrink-0" />
+                            <span className="truncate" title={rule.safe_note}>
+                              {rule.safe_note}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
 
-              {/* Safety Guarantee Alert */}
-              <Alert className="bg-muted/25">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                <AlertTitle className="text-xs font-semibold">Zero-Danger Rule Engine</AlertTitle>
-                <AlertDescription className="text-xs text-muted-foreground">
-                  Ferrowipe scans only verified Windows temporary folders, browser caches, and
-                  reclaimable logs. Personal documents, desktop files, and core OS binaries are
-                  never touched.
-                </AlertDescription>
-              </Alert>
+              {/* Safety Guarantee Strip */}
+              <div className="obs-card p-4 flex items-start gap-3 text-xs">
+                <div className="h-8 w-8 rounded-lg bg-[var(--obs-accent-soft)] border border-[var(--obs-accent-border)] text-[var(--obs-accent)] flex items-center justify-center shrink-0">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="font-semibold text-[var(--obs-fg)]">
+                    Zero-Danger Safe Clearing &amp; Chrome Data Protection
+                  </p>
+                  <p className="text-[11px] text-[var(--obs-text-muted)] mt-0.5 leading-relaxed">
+                    Ferrowipe enforces a hard Rust safety guard: browser passwords, cookies, logins,
+                    bookmarks, history, extensions, open tabs, AI agent auth/skills, IDE settings,
+                    Android SDKs/keystores, and personal documents are strictly protected and never
+                    deleted.
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
           {/* Phase B: Interactive Scan Results Preview */}
           {scanResult && !isScanning && !isCleaning && (
             <div className="space-y-4">
-              {/* Summary & Action Card */}
-              <Card className="border-primary/30 bg-card shadow-sm">
-                <CardContent className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Selected Reclaimable Space
-                      </span>
-                      <Badge variant="secondary" className="text-[10px] font-mono">
-                        Scanned in {formatDuration(scanResult.scan_duration_ms)}
-                      </Badge>
-                    </div>
-                    <div className="flex items-baseline gap-2.5">
-                      <span className="text-3xl font-bold text-primary tracking-tight tabular-nums">
-                        {formatBytes(selectedBytes)}
-                      </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {selectedFiles.toLocaleString()} file{selectedFiles === 1 ? '' : 's'} across{' '}
-                        {selectedCategories.length} categor
-                        {selectedCategories.length === 1 ? 'y' : 'ies'}
-                      </span>
-                    </div>
+              {/* Summary Action Card */}
+              <div className="obs-card p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ring-1 ring-[var(--obs-accent-border)]">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--obs-text-muted)]">
+                      Selected Reclaimable Space
+                    </span>
+                    <ObsidianBadge tone="neutral" className="font-mono">
+                      {formatDuration(scanResult.scan_duration_ms)}
+                    </ObsidianBadge>
                   </div>
-
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setScanResult(null);
-                        setSelectedItemIds(new Set());
-                      }}
-                      className="h-9 text-xs gap-1.5"
-                    >
-                      <ArrowLeft className="h-3.5 w-3.5" />
-                      Edit Targets
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleStartScan}
-                      className="h-9 text-xs gap-1.5"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      Rescan
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => setShowConfirmModal(true)}
-                      disabled={selectedItemIds.size === 0}
-                      className="h-9 text-xs gap-1.5 font-semibold"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Clean Selected
-                    </Button>
+                  <div className="flex items-baseline gap-2.5 flex-wrap">
+                    <span className="text-3xl font-bold text-[var(--obs-accent)] tracking-tight tabular-nums">
+                      {formatBytes(selectedBytes)}
+                    </span>
+                    <span className="text-xs text-[var(--obs-text-muted)] tabular-nums">
+                      {selectedFiles.toLocaleString()} file{selectedFiles === 1 ? '' : 's'} across{' '}
+                      {selectedCategories.length} categor
+                      {selectedCategories.length === 1 ? 'y' : 'ies'}
+                    </span>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
 
-              {/* Zero Junk State */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <ObsidianButton
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setScanResult(null);
+                      setSelectedItemIds(new Set());
+                    }}
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Edit Targets
+                  </ObsidianButton>
+                  <ObsidianButton variant="control" size="sm" onClick={handleStartScan}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Rescan
+                  </ObsidianButton>
+                  <ObsidianButton
+                    variant="control"
+                    size="sm"
+                    onClick={handleCopySelectedPaths}
+                    disabled={selectedJunkItems.length === 0}
+                    title="Copy all selected deleting paths to clipboard"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Paths ({selectedJunkItems.length})
+                  </ObsidianButton>
+                  <ObsidianButton
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setShowConfirmModal(true)}
+                    disabled={selectedItemIds.size === 0}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Clean Selected
+                  </ObsidianButton>
+                </div>
+              </div>
+
+              {/* Zero Junk Found */}
               {scanResult.categories.length === 0 ? (
-                <Card>
-                  <CardContent className="p-12 text-center space-y-2">
-                    <Sparkles className="h-10 w-10 text-primary mx-auto" />
-                    <h3 className="text-sm font-semibold text-foreground">Your System is Clean!</h3>
-                    <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                      No reclaimable junk files were found in the selected categories.
-                    </p>
-                    <div className="pt-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setScanResult(null)}
-                        className="text-xs"
-                      >
-                        Back to Target Rules
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                <div className="obs-card p-12 text-center space-y-2.5">
+                  <div className="h-11 w-11 rounded-xl bg-[var(--obs-accent-soft)] text-[var(--obs-accent)] mx-auto flex items-center justify-center">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--obs-fg)]">
+                    Your System is Clean!
+                  </h3>
+                  <p className="text-xs text-[var(--obs-text-muted)] max-w-md mx-auto">
+                    No reclaimable junk files were detected in the selected target categories.
+                  </p>
+                  <div className="pt-1">
+                    <ObsidianButton
+                      variant="control"
+                      size="sm"
+                      onClick={() => setScanResult(null)}
+                    >
+                      Back to Target Rules
+                    </ObsidianButton>
+                  </div>
+                </div>
               ) : (
                 <>
                   {/* Filter & Convenience Toolbar */}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="relative flex-1 min-w-[220px] max-w-sm">
-                      <Search className="h-3.5 w-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
-                      <Input
+                      <Search className="h-3.5 w-3.5 text-[var(--obs-text-subtle)] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
                         value={resultSearch}
                         onChange={(e) => setResultSearch(e.target.value)}
                         placeholder="Filter categories, files, or paths..."
-                        className="h-8 pl-8 pr-8 text-xs"
+                        className="obs-control h-8 w-full pl-8 pr-8 rounded-[9px] text-xs text-[var(--obs-fg)] placeholder:text-[var(--obs-text-subtle)] outline-none focus:ring-1 focus:ring-[var(--obs-accent)]"
                       />
                       {resultSearch && (
                         <button
+                          type="button"
                           onClick={() => setResultSearch('')}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--obs-text-subtle)] hover:text-[var(--obs-fg)]"
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -803,27 +918,21 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleToggleExpandAll}
-                        className="h-8 text-xs gap-1.5"
-                      >
+                      <ObsidianButton variant="control" size="sm" onClick={handleToggleExpandAll}>
                         <ChevronsUpDown className="h-3.5 w-3.5" />
                         {expandedCategories.size === scanResult.categories.length
                           ? 'Collapse All'
                           : 'Expand All'}
-                      </Button>
-                      <Button
-                        variant="outline"
+                      </ObsidianButton>
+                      <ObsidianButton
+                        variant="control"
                         size="sm"
                         onClick={handleToggleSelectAllScanned}
-                        className="h-8 text-xs"
                       >
                         {selectedItemIds.size === allScannedItemIds.length
                           ? 'Deselect All'
                           : 'Select All'}
-                      </Button>
+                      </ObsidianButton>
                     </div>
                   </div>
 
@@ -844,101 +953,118 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
                         : false;
 
                       return (
-                        <Card key={cat.category_id} className="overflow-hidden">
-                          {/* Category Header */}
+                        <div key={cat.category_id} className="obs-card overflow-hidden">
                           <div
                             onClick={() => toggleCategoryExpand(cat.category_id)}
-                            className="px-4 py-3.5 flex items-center justify-between hover:bg-accent/40 transition-colors cursor-pointer select-none"
+                            className="px-4 py-3.5 flex items-center justify-between hover:bg-[var(--obs-hover)] transition-colors cursor-pointer select-none"
                           >
                             <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <Checkbox
+                              <ObsidianCheckbox
                                 checked={checkedState}
-                                onCheckedChange={() => toggleCategorySelection(cat)}
-                                onClick={(e) => e.stopPropagation()}
+                                onChange={() => toggleCategorySelection(cat)}
+                                stopPropagation
                               />
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2">
-                                  <span className="text-xs font-semibold text-foreground truncate">
+                                  <span className="text-xs font-semibold text-[var(--obs-fg)] truncate">
                                     {cat.name}
                                   </span>
-                                  <Badge
-                                    variant="secondary"
-                                    className="text-[10px] font-mono h-4 px-1.5"
-                                  >
-                                    {cat.total_files.toLocaleString()} items
-                                  </Badge>
+                                  <ObsidianBadge tone="neutral" className="font-mono">
+                                    {cat.total_files.toLocaleString()} files
+                                  </ObsidianBadge>
                                 </div>
-                                <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                                <p className="text-[11px] text-[var(--obs-text-muted)] truncate mt-0.5">
                                   {cat.description}
                                 </p>
                               </div>
                             </div>
 
                             <div className="flex items-center gap-3 pl-4 shrink-0">
-                              <span className="text-xs font-bold font-mono text-primary tabular-nums">
+                              <span className="text-xs font-bold font-mono text-[var(--obs-accent)] tabular-nums">
                                 {formatBytes(cat.total_bytes)}
                               </span>
                               {isExpanded ? (
-                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                <ChevronDown className="h-4 w-4 text-[var(--obs-text-muted)]" />
                               ) : (
-                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                <ChevronRight className="h-4 w-4 text-[var(--obs-text-muted)]" />
                               )}
                             </div>
                           </div>
 
-                          {/* Sub-Items List */}
-                          {isExpanded && (
-                            <div className="border-t bg-muted/20 divide-y divide-border/60 max-h-60 overflow-y-auto">
-                              {cat.items.map((item) => {
-                                const isItemSelected = selectedItemIds.has(item.id);
-                                return (
-                                  <div
-                                    key={item.id}
-                                    onClick={() => toggleItemSelection(item.id)}
-                                    className="px-4 py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-accent/35 cursor-pointer select-none group"
-                                  >
-                                    <div className="flex items-center gap-3 min-w-0 flex-1 pl-4">
-                                      <Checkbox
-                                        checked={isItemSelected}
-                                        onCheckedChange={() => toggleItemSelection(item.id)}
-                                        onClick={(e) => e.stopPropagation()}
-                                      />
-                                      <div className="min-w-0 flex-1">
-                                        <span className="text-foreground font-mono text-[11px] truncate block">
-                                          {item.name}
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground font-mono truncate block">
-                                          {item.path}
-                                        </span>
-                                      </div>
-                                    </div>
+                          <AnimatePresence initial={false}>
+                            {isExpanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.18 }}
+                                className="overflow-hidden border-t border-[var(--obs-border)] bg-[var(--obs-bg)]/50"
+                              >
+                                <div className="divide-y divide-[var(--obs-border)]/70 max-h-64 overflow-y-auto obs-scroll">
+                                  {cat.items.map((item) => {
+                                    const isItemSelected = selectedItemIds.has(item.id);
+                                    return (
+                                      <div
+                                        key={item.id}
+                                        onClick={() => toggleItemSelection(item.id)}
+                                        className="px-4 py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-[var(--obs-hover)] cursor-pointer select-none group"
+                                      >
+                                        <div className="flex items-center gap-3 min-w-0 flex-1 pl-4">
+                                          <ObsidianCheckbox
+                                            checked={isItemSelected}
+                                            onChange={() => toggleItemSelection(item.id)}
+                                            stopPropagation
+                                          />
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-[var(--obs-fg)] font-mono text-[11px] font-medium truncate block">
+                                                {item.name}
+                                              </span>
+                                              {item.file_count > 1 && (
+                                                <span className="text-[10px] font-mono text-[var(--obs-text-subtle)] shrink-0">
+                                                  ({item.file_count.toLocaleString()} files)
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-[10px] text-[var(--obs-text-subtle)] font-mono truncate block">
+                                              {item.path}
+                                            </span>
+                                          </div>
+                                        </div>
 
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <span className="font-mono text-[11px] font-medium text-foreground tabular-nums">
-                                        {formatBytes(item.size_bytes)}
-                                      </span>
-                                      {cat.category_id !== 'recycle_bin' && (
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Button
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="font-mono text-[11px] font-medium text-[var(--obs-fg)] tabular-nums mr-1">
+                                            {formatBytes(item.size_bytes)}
+                                          </span>
+                                          <ObsidianButton
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            onClick={(e) => handleCopySinglePath(item.path, e)}
+                                            title="Copy path"
+                                          >
+                                            <Copy className="h-3 w-3" />
+                                          </ObsidianButton>
+                                          {cat.category_id !== 'recycle_bin' && (
+                                            <ObsidianButton
                                               variant="ghost"
                                               size="icon"
-                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
                                               onClick={(e) => handleLocateItem(item.path, e)}
+                                              title="Locate in Windows Explorer"
                                             >
                                               <MapPin className="h-3 w-3" />
-                                            </Button>
-                                          </TooltipTrigger>
-                                          <TooltipContent>Locate in File Explorer</TooltipContent>
-                                        </Tooltip>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </Card>
+                                            </ObsidianButton>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
                       );
                     })}
                   </div>
@@ -947,7 +1073,7 @@ export const JunkCleaner: React.FC<JunkCleanerProps> = ({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 };

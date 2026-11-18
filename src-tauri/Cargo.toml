@@ -1,8 +1,8 @@
 [package]
 name = "ferrowipe"
-version = "0.1.0"
+version = "1.0.0"
 description = "Fast, lightweight Windows disk cleaner and analyzer built in Rust + Tauri 2"
-authors = ["dhruvb2007"]
+authors = ["Dhruv Prajapati"]
 license = "MIT"
 repository = "https://github.com/dhruvb2007/Ferrowipe"
 edition = "2021"
@@ -23,6 +23,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Ioctl",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_Security"
 ] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

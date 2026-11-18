@@ -13,11 +13,26 @@ use windows_sys::Win32::UI::Shell::{
     SHQUERYRBINFO,
 };
 
+use crate::drives::get_system_drives;
 use crate::models::{
     CategorySummary, CleanProgress, CleanReport, CleanRequest, JunkItem, ScanProgress, ScanResult,
     SkippedFile,
 };
-use crate::rules::{get_cleanup_rules, matches_extension};
+use crate::rules::{get_cleanup_rules, is_protected_user_data_path, matches_extension};
+
+pub fn get_active_drive_letters() -> Vec<char> {
+    let drives = get_system_drives();
+    let mut letters: Vec<char> = drives
+        .into_iter()
+        .filter(|d| !d.drive_type.contains("CD") && !d.drive_type.contains("Network"))
+        .filter_map(|d| d.mount_point.chars().next())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if letters.is_empty() {
+        letters.push('C');
+    }
+    letters
+}
 
 fn to_wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s)
@@ -71,6 +86,116 @@ pub fn empty_recycle_bin(drive_letter: Option<char>) -> Result<(), String> {
     }
 }
 
+/// Generates a clear human-readable bucket label for browser/IDE/AI cache folders,
+/// e.g., `[Default] Service Worker / CacheStorage` or `[Shared] OptGuideOnDeviceModel`.
+fn describe_cache_bucket(path: &Path) -> String {
+    let s = path.to_string_lossy().replace('/', "\\");
+    let lower = s.to_lowercase();
+
+    // Extract profile context for Chromium / Firefox
+    if let Some(idx) = lower.find("\\user data\\") {
+        let after = &s[idx + "\\user data\\".len()..];
+        let parts: Vec<&str> = after.split('\\').filter(|p| !p.is_empty()).collect();
+        if parts.len() >= 2 {
+            let first = parts[0];
+            let is_profile = first.eq_ignore_ascii_case("Default")
+                || first.starts_with("Profile ")
+                || first.eq_ignore_ascii_case("Guest Profile")
+                || first.eq_ignore_ascii_case("System Profile");
+            if is_profile {
+                return format!("[{}] {}", first, parts[1..].join(" / "));
+            }
+        }
+        return format!("[Shared] {}", parts.join(" / "));
+    }
+
+    if let Some(idx) = lower.find("\\profiles\\") {
+        let after = &s[idx + "\\profiles\\".len()..];
+        let parts: Vec<&str> = after.split('\\').filter(|p| !p.is_empty()).collect();
+        if parts.len() >= 2 {
+            return format!("[{}] {}", parts[0], parts[1..].join(" / "));
+        }
+    }
+
+    // For IDE / Gradle / AI folders, show parent + leaf for clarity (e.g. AndroidStudio2024.2 / caches)
+    let comps: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    if comps.len() >= 2 {
+        format!("{} / {}", comps[comps.len() - 2], comps[comps.len() - 1])
+    } else {
+        path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or(s)
+    }
+}
+
+fn should_bucket_whole_target(category_id: &str) -> bool {
+    category_id.starts_with("browser_")
+        || category_id.starts_with("ai_")
+        || category_id.starts_with("dev_")
+        || category_id.starts_with("app_")
+        || category_id == "gpu_shader_cache"
+}
+
+fn scan_directory_totals(
+    dir: &Path,
+    file_extensions: &Option<Vec<&'static str>>,
+    cancel_flag: &Arc<AtomicBool>,
+    scanned_files_count: &Arc<AtomicU64>,
+    scanned_bytes_count: &Arc<AtomicU64>,
+    last_emit: &Arc<std::sync::Mutex<Instant>>,
+    app: &AppHandle,
+) -> (u64, u64) {
+    let mut sub_bytes = 0u64;
+    let mut sub_files = 0u64;
+
+    for walk_res in jwalk::WalkDir::new(dir)
+        .skip_hidden(false)
+        .follow_links(false)
+    {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Ok(sub_entry) = walk_res {
+            if sub_entry.file_type().is_file() {
+                let sub_p = sub_entry.path();
+                if is_protected_user_data_path(&sub_p) {
+                    continue;
+                }
+                if !matches_extension(&sub_p, file_extensions) {
+                    continue;
+                }
+                if let Ok(sub_meta) = sub_entry.metadata() {
+                    let size = sub_meta.len();
+                    sub_bytes += size;
+                    sub_files += 1;
+                    scanned_files_count.fetch_add(1, Ordering::Relaxed);
+                    scanned_bytes_count.fetch_add(size, Ordering::Relaxed);
+
+                    if let Ok(mut last) = last_emit.lock() {
+                        if last.elapsed() >= Duration::from_millis(60) {
+                            *last = Instant::now();
+                            let _ = app.emit(
+                                "scan:progress",
+                                ScanProgress {
+                                    scanned_files: scanned_files_count.load(Ordering::Relaxed),
+                                    scanned_bytes: scanned_bytes_count.load(Ordering::Relaxed),
+                                    current_path: sub_p.to_string_lossy().to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (sub_bytes, sub_files)
+}
+
 pub fn run_scan(
     active_categories: Vec<String>,
     cancel_flag: Arc<AtomicBool>,
@@ -91,7 +216,6 @@ pub fn run_scan(
             break;
         }
 
-        // If categories filter provided, ensure rule is requested
         if !active_categories.is_empty()
             && !active_categories.iter().any(|c| c == rule.category_id)
         {
@@ -99,12 +223,11 @@ pub fn run_scan(
         }
 
         if rule.is_recycle_bin {
-            // Check Recycle bin for drives C, D, E, F
             let mut rb_total_bytes = 0u64;
             let mut rb_total_items = 0u64;
             let mut rb_items = Vec::new();
 
-            for letter in ['C', 'D', 'E', 'F'] {
+            for letter in get_active_drive_letters() {
                 let (bytes, count) = query_recycle_bin(Some(letter));
                 if count > 0 {
                     rb_total_bytes += bytes;
@@ -140,22 +263,24 @@ pub fn run_scan(
         let mut cat_bytes = 0u64;
         let mut cat_files = 0u64;
         let mut cat_items = Vec::new();
+        let bucket_mode = should_bucket_whole_target(rule.category_id);
 
         for target in &rule.target_paths {
             if cancel_flag.load(Ordering::Relaxed) {
                 break;
             }
 
-            if !target.exists() {
+            if !target.exists() || is_protected_user_data_path(target) {
                 continue;
             }
 
-            // If target is a single file (like MEMORY.DMP)
             if target.is_file() {
                 if let Ok(meta) = target.metadata() {
                     let size = meta.len();
                     cat_bytes += size;
                     cat_files += 1;
+                    scanned_files_count.fetch_add(1, Ordering::Relaxed);
+                    scanned_bytes_count.fetch_add(size, Ordering::Relaxed);
                     cat_items.push(JunkItem {
                         id: target.to_string_lossy().to_string(),
                         category_id: rule.category_id.to_string(),
@@ -172,7 +297,35 @@ pub fn run_scan(
                 continue;
             }
 
-            // Target is a directory. First collect immediate children to form meaningful JunkItems
+            if bucket_mode {
+                // Scan the entire cache target as one clean, transparent, selectable bucket
+                // (avoids 20,000 tiny `f_00xxxx` Chrome cache rows and clearly labels profiles!)
+                let (sub_bytes, sub_files) = scan_directory_totals(
+                    target,
+                    &rule.file_extensions,
+                    &cancel_flag,
+                    &scanned_files_count,
+                    &scanned_bytes_count,
+                    &last_emit,
+                    &app,
+                );
+                if sub_files > 0 {
+                    cat_bytes += sub_bytes;
+                    cat_files += sub_files;
+                    cat_items.push(JunkItem {
+                        id: target.to_string_lossy().to_string(),
+                        category_id: rule.category_id.to_string(),
+                        name: describe_cache_bucket(target),
+                        path: target.to_string_lossy().to_string(),
+                        size_bytes: sub_bytes,
+                        file_count: sub_files,
+                        is_selected: true,
+                    });
+                }
+                continue;
+            }
+
+            // General Temp / System folder: list immediate children
             if let Ok(entries) = fs::read_dir(target) {
                 for entry in entries.flatten() {
                     if cancel_flag.load(Ordering::Relaxed) {
@@ -180,6 +333,9 @@ pub fn run_scan(
                     }
 
                     let path = entry.path();
+                    if is_protected_user_data_path(&path) {
+                        continue;
+                    }
                     let file_name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -207,52 +363,15 @@ pub fn run_scan(
                             });
                         }
                     } else if path.is_dir() {
-                        // Recursively scan subfolder using jwalk for maximum multithreaded performance
-                        let mut sub_bytes = 0u64;
-                        let mut sub_files = 0u64;
-
-                        for walk_res in jwalk::WalkDir::new(&path)
-                            .skip_hidden(false)
-                            .follow_links(false)
-                        {
-                            if cancel_flag.load(Ordering::Relaxed) {
-                                break;
-                            }
-
-                            if let Ok(sub_entry) = walk_res {
-                                if sub_entry.file_type().is_file() {
-                                    let sub_p = sub_entry.path();
-                                    if !matches_extension(&sub_p, &rule.file_extensions) {
-                                        continue;
-                                    }
-                                    if let Ok(sub_meta) = sub_entry.metadata() {
-                                        let size = sub_meta.len();
-                                        sub_bytes += size;
-                                        sub_files += 1;
-                                        scanned_files_count.fetch_add(1, Ordering::Relaxed);
-                                        scanned_bytes_count.fetch_add(size, Ordering::Relaxed);
-
-                                        // Throttled progress emit
-                                        let mut last = last_emit.lock().unwrap();
-                                        if last.elapsed() >= Duration::from_millis(60) {
-                                            *last = Instant::now();
-                                            let _ = app.emit(
-                                                "scan:progress",
-                                                ScanProgress {
-                                                    scanned_files: scanned_files_count
-                                                        .load(Ordering::Relaxed),
-                                                    scanned_bytes: scanned_bytes_count
-                                                        .load(Ordering::Relaxed),
-                                                    current_path: sub_p
-                                                        .to_string_lossy()
-                                                        .to_string(),
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        let (sub_bytes, sub_files) = scan_directory_totals(
+                            &path,
+                            &rule.file_extensions,
+                            &cancel_flag,
+                            &scanned_files_count,
+                            &scanned_bytes_count,
+                            &last_emit,
+                            &app,
+                        );
 
                         if sub_files > 0 {
                             cat_bytes += sub_bytes;
@@ -275,7 +394,6 @@ pub fn run_scan(
         if cat_files > 0 {
             total_reclaimable_bytes += cat_bytes;
             total_reclaimable_files += cat_files;
-            // Sort items by size descending so largest folders appear first
             cat_items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
 
             category_summaries.push(CategorySummary {
@@ -290,7 +408,8 @@ pub fn run_scan(
         }
     }
 
-    // Final scan progress emit
+    category_summaries.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+
     let _ = app.emit(
         "scan:progress",
         ScanProgress {
@@ -316,6 +435,7 @@ pub fn run_clean(
     let start_time = Instant::now();
     let mut freed_bytes = 0u64;
     let mut removed_files = 0u64;
+    let mut deleted_paths = Vec::new();
     let mut skipped_files = Vec::new();
 
     let selected_categories_set: HashSet<String> =
@@ -324,9 +444,9 @@ pub fn run_clean(
 
     let last_emit = Arc::new(std::sync::Mutex::new(Instant::now()));
 
-    // 1. Recycle Bin emptying
+    // 1. Recycle Bin emptying across all active drives
     if selected_categories_set.contains("recycle_bin") {
-        for letter in ['C', 'D', 'E', 'F'] {
+        for letter in get_active_drive_letters() {
             let item_id = format!("recycle_bin_{}", letter);
             if selected_items_set.is_empty() || selected_items_set.contains(&item_id) {
                 let (bytes, count) = query_recycle_bin(Some(letter));
@@ -335,6 +455,7 @@ pub fn run_clean(
                         Ok(_) => {
                             freed_bytes += bytes;
                             removed_files += count;
+                            deleted_paths.push(format!("{}:\\$Recycle.Bin", letter));
                             let _ = app.emit(
                                 "clean:progress",
                                 CleanProgress {
@@ -358,7 +479,7 @@ pub fn run_clean(
         }
     }
 
-    // 2. File / Directory items deletion
+    // 2. File / Directory items deletion (with hard protected-data safety guard)
     for item_path_str in selected_items_set {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
@@ -373,12 +494,22 @@ pub fn run_clean(
             continue;
         }
 
+        if is_protected_user_data_path(&path) {
+            skipped_files.push(SkippedFile {
+                path: item_path_str.clone(),
+                category_id: "protected".to_string(),
+                reason: "Blocked by Safety Shield: Critical user data is protected".to_string(),
+            });
+            continue;
+        }
+
         if path.is_file() {
             let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
             match fs::remove_file(&path) {
                 Ok(_) => {
                     freed_bytes += file_size;
                     removed_files += 1;
+                    deleted_paths.push(item_path_str.clone());
                 }
                 Err(e) => {
                     let reason = match e.kind() {
@@ -395,7 +526,7 @@ pub fn run_clean(
                 }
             }
         } else if path.is_dir() {
-            // Delete directory contents safely
+            let before_removed = removed_files;
             delete_directory_contents(
                 &path,
                 &mut freed_bytes,
@@ -405,26 +536,31 @@ pub fn run_clean(
                 &app,
                 &last_emit,
             );
+            if removed_files > before_removed {
+                deleted_paths.push(item_path_str.clone());
+            }
         }
 
-        let mut last = last_emit.lock().unwrap();
-        if last.elapsed() >= Duration::from_millis(60) {
-            *last = Instant::now();
-            let _ = app.emit(
-                "clean:progress",
-                CleanProgress {
-                    cleaned_files: removed_files,
-                    freed_bytes,
-                    total_target_bytes: freed_bytes,
-                    current_path: item_path_str,
-                },
-            );
+        if let Ok(mut last) = last_emit.lock() {
+            if last.elapsed() >= Duration::from_millis(60) {
+                *last = Instant::now();
+                let _ = app.emit(
+                    "clean:progress",
+                    CleanProgress {
+                        cleaned_files: removed_files,
+                        freed_bytes,
+                        total_target_bytes: freed_bytes,
+                        current_path: item_path_str,
+                    },
+                );
+            }
         }
     }
 
     CleanReport {
         freed_bytes,
         removed_files,
+        deleted_paths,
         skipped_files,
         duration_ms: start_time.elapsed().as_millis() as u64,
     }
@@ -439,6 +575,10 @@ fn delete_directory_contents(
     app: &AppHandle,
     last_emit: &Arc<std::sync::Mutex<Instant>>,
 ) {
+    if is_protected_user_data_path(dir) {
+        return;
+    }
+
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if cancel_flag.load(Ordering::Relaxed) {
@@ -446,6 +586,10 @@ fn delete_directory_contents(
             }
 
             let path = entry.path();
+            if is_protected_user_data_path(&path) {
+                continue;
+            }
+
             if path.is_file() {
                 let size = path.metadata().map(|m| m.len()).unwrap_or(0);
                 match fs::remove_file(&path) {
@@ -469,7 +613,6 @@ fn delete_directory_contents(
                     }
                 }
             } else if path.is_dir() {
-                // Recursively delete inner items
                 delete_directory_contents(
                     &path,
                     freed_bytes,
@@ -479,22 +622,22 @@ fn delete_directory_contents(
                     app,
                     last_emit,
                 );
-                // Attempt to remove empty dir
                 let _ = fs::remove_dir(&path);
             }
 
-            let mut last = last_emit.lock().unwrap();
-            if last.elapsed() >= Duration::from_millis(60) {
-                *last = Instant::now();
-                let _ = app.emit(
-                    "clean:progress",
-                    CleanProgress {
-                        cleaned_files: *removed_files,
-                        freed_bytes: *freed_bytes,
-                        total_target_bytes: *freed_bytes,
-                        current_path: path.to_string_lossy().to_string(),
-                    },
-                );
+            if let Ok(mut last) = last_emit.lock() {
+                if last.elapsed() >= Duration::from_millis(60) {
+                    *last = Instant::now();
+                    let _ = app.emit(
+                        "clean:progress",
+                        CleanProgress {
+                            cleaned_files: *removed_files,
+                            freed_bytes: *freed_bytes,
+                            total_target_bytes: *freed_bytes,
+                            current_path: path.to_string_lossy().to_string(),
+                        },
+                    );
+                }
             }
         }
     }

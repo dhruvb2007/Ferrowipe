@@ -1,163 +1,213 @@
-# Ferrowipe ⚡
+<p align="center">
+  <img src="./Ferrowipe_banner.png" alt="Ferrowipe — Fast, Safe Windows Disk Optimizer" width="680" />
+</p>
+
+<h3 align="center">
+  Fast, Safe &amp; Modern Windows Disk Optimizer, Junk Cleaner &amp; Space Analyzer
+</h3>
 
 <p align="center">
-  <strong>Blazingly Fast, Safe & Modern Windows Disk Optimizer & Space Analyzer</strong><br>
-  <em>Built with Rust & Tauri 2.0</em>
+  Reclaim gigabytes of wasted space, see what's filling up your drives in real time, and inspect every app's true disk footprint — in seconds.
 </p>
 
 <p align="center">
-  <img src="./app-icon.svg" alt="Ferrowipe Logo" width="128" height="128" />
+  <a href="https://github.com/dhruvb2007/Ferrowipe/releases/latest">
+    <img src="https://img.shields.io/badge/Release-v1.0.0-ea580c?style=for-the-badge" alt="Version 1.0.0" />
+  </a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-181818?style=for-the-badge&logo=windows&logoColor=f97316" alt="Windows 10 & 11" />
+  <img src="https://img.shields.io/badge/Built%20With-Rust%20%2B%20Tauri%202-181818?style=for-the-badge&logo=rust&logoColor=f97316" alt="Built with Rust & Tauri 2" />
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-16a34a?style=for-the-badge" alt="MIT License" />
+  </a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.1.0-emerald.svg" alt="Version 0.1.0" />
-  <img src="https://img.shields.io/badge/Rust-1.80+-orange.svg?logo=rust" alt="Rust" />
-  <img src="https://img.shields.io/badge/Tauri-2.0-blue.svg?logo=tauri" alt="Tauri 2" />
-  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078d4.svg?logo=windows" alt="Windows" />
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
+  <a href="#-download--install">Download</a> •
+  <a href="#-what-ferrowipe-does">Features</a> •
+  <a href="#-screenshots">Screenshots</a> •
+  <a href="#-built-for-safety--privacy">Safety &amp; Privacy</a> •
+  <a href="#-for-developers">Build from Source</a>
+</p>
+
+<p align="center">
+  <img src="./Screenshot/01_dashboard_overview_dark.png" alt="Ferrowipe Storage Overview Dashboard" width="100%" />
 </p>
 
 ---
 
-## 🚀 Overview
+## Why Ferrowipe?
 
-**Ferrowipe** is an ultra-fast, lightweight Windows desktop application designed to uncover what is consuming your disk space and safely purge accumulated system junk, browser caches, and stale temporary files.
+Running out of space on your `C:` drive shouldn't mean installing bloated "PC cleaner" tools packed with ads, popups, or risky registry tweaks.
 
-Unlike traditional, sluggish cleaners that rely on heavy Electron runtimes or slow WMI queries, Ferrowipe is built on **Rust systems programming** and **Tauri 2**, running natively on Windows with minimal memory footprint (~35MB RAM) and near-instantaneous startup.
+**Ferrowipe** is a free, open-source Windows desktop app built to do one job exceptionally well: **keep your drives clean and show you exactly where your storage is going.**
 
----
-
-## ✨ Features in V0.1 Core
-
-### 1. 💽 Instant Drive Overview & Hardware Diagnostics
-* **Volume Enumeration**: Accurately lists all connected partitions (`C:`, `D:`, external USB flash drives, network shares).
-* **Zero-Lag Hardware Detection**: Queries Win32 `IOCTL_STORAGE_QUERY_PROPERTY` directly for disk seek-penalty to distinguish **SSD / NVMe** from mechanical **HDD** in **< 0.1 milliseconds** (bypassing slow WMI).
-* **Real-Time Storage Metrics**: Displays partition capacity, used space, free space, and filesystem type (`NTFS`, `exFAT`, `FAT32`).
-* **Low-Space Headroom Warnings**: Automatic visual warning badge and alert banner when a drive falls below **15%** or **15 GB** free capacity.
-
-### 2. 🧹 Rule-Based Safe Junk Cleaner
-Ferrowipe targets only verified, safe-to-clean junk locations without ever touching user documents, personal files, or core Windows binaries:
-* **User Temp**: `%TEMP%` and `%LOCALAPPDATA%\Temp`
-* **Windows System Temp**: `C:\Windows\Temp`
-* **Recycle Bin**: Per-drive native querying and purging via `SHQueryRecycleBinW` and `SHEmptyRecycleBinW`
-* **Browser Caches**:
-  * Google Chrome (`Cache`, `Code Cache`, `GPUCache`)
-  * Microsoft Edge (`Cache`, `Code Cache`, `GPUCache`)
-  * Mozilla Firefox (`Profiles\*\cache2`)
-  * Brave Browser (`Cache`, `Code Cache`)
-* **Windows Update Cache**: `C:\Windows\SoftwareDistribution\Download`
-* **Thumbnail & Icon Cache**: `%LOCALAPPDATA%\Microsoft\Windows\Explorer` (`thumbcache_*.db`)
-* **Crash Dumps & WER**: `%LOCALAPPDATA%\CrashDumps`, `%PROGRAMDATA%\Microsoft\Windows\WER`, `C:\Windows\Minidump`, `MEMORY.DMP`
-* **Prefetch & Old System Logs**: `C:\Windows\Prefetch`, `C:\Windows\Logs\CBS`, `DISM`
-
-### 3. 🎯 Core Interactive Workflow
-```
-[Select Rules] ──▶ [Multithreaded Scan] ──▶ [Interactive Preview] ──▶ [Confirm Modal] ──▶ [Safe Clean] ──▶ [Detailed Report]
-```
-* **Real-Time Scan**: Live scanned path preview with an instantaneous **Cancel Scan** button.
-* **Granular Control**: Both **per-category** and **per-item** checkboxes with expandable directory accordions.
-* **Dynamic Reclaimable Calculation**: See exactly how much space will be freed in real time as you toggle checkboxes.
-* **Safe Error Handling**: Files currently locked by active processes (open browsers or system services) are safely skipped without halting the cleanup pipeline.
-* **Comprehensive Post-Clean Report**: Detailed summary of freed bytes, files purged, and a filterable log of skipped items with exact reasons (e.g. `ERROR_SHARING_VIOLATION`), with one-click clipboard copying.
-
-### 4. 📂 Full Disk Analyzer, Tree Explorer & Size-Based Deletion (New!)
-Instantly identify what is actually consuming your disk space, inspect nested subfolders, and safely delete large folders based on size:
-* **Full Disk Analysis Mode (`Analyze Full Disk`)**: Scans the entire drive with work-stealing parallel threads, computes recursive sizes bottom-up in seconds, and caches the hierarchical tree in memory for instant navigation.
-* **Interactive Expandable Tree View**:
-  * Expand/collapse chevrons (`>` / `v`) indicate whether subfolders are available inside any directory.
-  * Click to expand subfolders inline with depth-indented tree connectors.
-  * View exact recursive sizes, file counts, subfolder counts, and proportional size bars at every level.
-* **Locate to that Folder (`Locate Button`)**:
-  * One-click "Locate" button uses Windows Shell integration (`explorer.exe /select,"<path>"`) to open Windows File Explorer and immediately highlight that exact folder on disk.
-* **Granular Filters & Sorting**:
-  * Filter by minimum size thresholds (`> 100 MB`, `> 500 MB`, `> 1 GB`, `> 5 GB`, `> 10 GB`).
-  * Instant sorting by Size (Largest first), Size (Smallest first), File Count, or Name.
-* **Safe & Permanent Deletion Controls**:
-  * Multi-select folders and files with live total space counter.
-  * **Safe Mode (Default)**: Moves deleted folders to the native Windows Recycle Bin using `SHFileOperationW`, allowing recovery if needed.
-  * **Permanent Deletion Mode**: Bypasses the Recycle Bin for immediate disk space reclamation.
-  * **Built-in Safety Shield**: Hardcoded protection preventing accidental deletion of critical Windows system directories (`C:\Windows`, `C:\`, root partitions, system folders).
+* **Instant & Lightweight** — Opens in a blink and uses around ~35 MB of RAM, not hundreds.
+* **Safe by Design** — Never touches your personal files, browser passwords, cookies, logins, bookmarks, or Windows system folders.
+* **100% Private & Offline** — No accounts, no tracking, no background bloatware, and no ads. Ever.
+* **Obsidian Dark & Crisp Light Modes** — Designed with a clean, distraction-free interface that looks right at home on Windows 10 and 11.
 
 ---
 
-## ⚡ Performance Architecture
+## ✨ What Ferrowipe Does
 
-| Optimization | Traditional Cleaners | Ferrowipe (Rust + Tauri 2) |
-|---|---|---|
-| **Drive Detection** | WMI queries (1,500ms – 3,000ms) | Direct Win32 seek-penalty syscalls (< 0.1ms) |
-| **Directory Traversal** | Single-threaded synchronous I/O | `jwalk` parallel work-stealing threadpool |
-| **Recycle Bin** | Manual folder recursion (ACL permission failures) | Native Windows Shell API (`SHQueryRecycleBinW`) |
-| **UI Event Overhead** | Emitting IPC events for every file (freezes UI) | Throttled 60ms batch updates (~16 FPS) |
-| **Memory Consumption** | ~150MB – 400MB (Electron / Chromium) | ~30MB – 50MB (System WebView2) |
+### 1. 💽 Storage Overview
+Get a clear health check of every drive connected to your PC (`C:`, `D:`, SSD/NVMe, HDD, and external USB drives) the moment you open Ferrowipe.
+* **Live Storage Health Bar** — See used space, free headroom, and drive types (`SSD / NVMe`, `HDD`, `NTFS`, `exFAT`) at a glance.
+* **Early Low-Space Warnings** — Alerts you automatically when any drive drops below **15%** or **15 GB** free so Windows stays responsive.
+* **One-Click Quick Workflows** — Jump straight into *Quick Safe Clean*, *Browser Caches*, *App Storage*, *Top Space Hogs*, or *Empty Recycle Bin*.
 
 ---
 
-## 🛠️ Build & Installation
+### 2. 🧹 Smart Junk Cleaner
+Ferrowipe automatically detects only the browsers, apps, and tools **actually installed on your PC** — keeping the list clean and relevant.
+* **Windows Temp & Recycle Bin** — Clears user temp folders, Windows temp files, thumbnails, crash dumps, Windows Update downloads, and Recycle Bins across all local drives.
+* **Browsers (Multi-Profile Safe)** — Cleans web caches, GPU shader caches, and large offline web app caches for **Chrome, Edge, Firefox, Brave, Opera, Opera GX, and Vivaldi** — while **strictly protecting** your passwords, logins, cookies, bookmarks, history, tabs, and extensions.
+* **Desktop Apps & GPU Caches** — Safely trims cached media and shaders from **Discord, Spotify, Steam, Slack, Postman, Notion**, plus **DirectX, NVIDIA, and AMD** shader caches.
+* **Developer & AI Tooling** — Auto-detects caches and logs from **VS Code, Android Studio, Gradle, JetBrains IDEs, Visual Studio, npm/pnpm/Yarn, pip/uv, Rust Cargo, NuGet, Docker, Cursor, Windsurf, Claude, ChatGPT, Codex, Antigravity, and Ollama** — never touching your projects, SDKs, credentials, or local AI model weights.
+* **Full Preview & Detailed Report** — Review every single folder before deleting, see real-time space savings as you check or uncheck items, and get a clean summary report afterward.
+
+---
+
+### 3. 📂 Live Space Analyzer
+Stop guessing which hidden folder is eating 80 GB of your SSD.
+* **Full-Drive Analysis in Seconds** — Scans an entire drive quickly and keeps sizes synced live in memory as files change on your PC.
+* **Interactive Folder Tree & Top Space Hogs** — Expand any folder inline to see exact sizes and file counts, or switch to **Top Space Hogs** to instantly list the biggest space-eaters across your drive.
+* **Disk Size Verification** — Cross-checks scanned totals against Windows' reported used space so you know the numbers are accurate.
+* **One-Click Locate** — Click **Locate** on any folder to open Windows File Explorer with that exact folder highlighted.
+* **Safe Deletion Controls** — Moves deleted items to the **Windows Recycle Bin by default** so you can always recover them, with an explicit toggle if you want permanent deletion.
+
+---
+
+### 4. 📦 App Storage Inspector
+Windows' built-in "Installed Apps" list often misses huge hidden folders stored in `AppData`, browser profiles, game caches, and SDKs.
+* **True App Footprint** — Separates **Program Install Binaries** from **User Data, Profiles & Caches** so you see the *real* total size of every app.
+* **Filter & Search Instantly** — Filter by category (*IDEs & Dev*, *Gaming*, *AI & Agents*, *Media & Creative*, *Browsers*, *Communication*), drive letter, or name.
+* **Inspect in One Click** — Jump directly from any app's data folder into the Space Analyzer to see what's inside.
+
+---
+
+## 📸 Screenshots
+
+### Storage Overview — Dark & Light Mode
+| Obsidian Dark Mode | Crisp Light Mode |
+| :---: | :---: |
+| <img src="./Screenshot/01_dashboard_overview_dark.png" alt="Storage Overview Dark Mode" /> | <img src="./Screenshot/03_dashboard_overview_light.png" alt="Storage Overview Light Mode" /> |
+
+### Smart Junk Cleaner — Auto-Detection, Live Preview & Summary Report
+| Auto-Detected Cleanup Targets | Interactive Reclaimable Preview |
+| :---: | :---: |
+| <img src="./Screenshot/05_junk_cleaner_targets_dark.png" alt="Junk Cleaner Auto-Detected Targets" /> | <img src="./Screenshot/07_junk_cleaner_results_preview.png" alt="Junk Cleaner Scan Results Preview" /> |
+
+<p align="center">
+  <img src="./Screenshot/10_junk_cleaner_report_modal.png" alt="Cleaning Summary Report Modal" width="85%" />
+  <br />
+  <em>Detailed post-clean report showing freed space, removed files, and safely skipped locked files</em>
+</p>
+
+### Live Space Analyzer — Folder Tree, Top Space Hogs & Safe Delete
+| Interactive Folder Tree & Disk Check | Instant Top Space Hogs |
+| :---: | :---: |
+| <img src="./Screenshot/13_space_analyzer_tree_explorer.png" alt="Space Analyzer Folder Tree" /> | <img src="./Screenshot/15_space_analyzer_top_space_hogs.png" alt="Top Space Hogs Finder" /> |
+
+<p align="center">
+  <img src="./Screenshot/16_space_analyzer_delete_modal_safe.png" alt="Safe Delete Confirmation Modal" width="85%" />
+  <br />
+  <em>Safe Mode moves items to the Windows Recycle Bin by default, backed by Ferrowipe's System Safety Shield</em>
+</p>
+
+### App Storage Inspector
+<p align="center">
+  <img src="./Screenshot/18_app_storage_overview_expanded.png" alt="App Storage Footprint Breakdown" width="95%" />
+  <br />
+  <em>See both install binaries and hidden user data/caches for every installed app, game, and toolchain</em>
+</p>
+
+---
+
+## ⬇️ Download & Install
+
+1. Go to the **[Ferrowipe Releases Page](https://github.com/dhruvb2007/Ferrowipe/releases/latest)**.
+2. Download the version you prefer for **Windows 10 / 11 (64-bit)**:
+   * **Windows Installer (`.exe` or `.msi`)** — Recommended for most users. Double-click to install Ferrowipe with a Start Menu shortcut.
+   * **Portable (`ferrowipe.exe`)** — Run directly without installing anything.
+3. Launch **Ferrowipe** and click **Quick Junk Scan** or **Run Smart Scan**!
+
+> **Note about Windows SmartScreen:** Because Ferrowipe is an independent, free open-source release without a paid commercial code-signing certificate, Windows Defender SmartScreen may show a *"Windows protected your PC"* prompt on first launch. Click **More info → Run anyway** to continue, or build directly from source below.
+
+### ⌨️ Handy Keyboard Shortcuts
+
+| Shortcut | Action |
+| :--- | :--- |
+| `Ctrl + 1` | Open **Storage Overview** |
+| `Ctrl + 2` | Open **Junk Cleaner** |
+| `Ctrl + 3` | Open **Space Analyzer** |
+| `Ctrl + 4` | Open **App Storage** |
+| `Ctrl + B` | Collapse / Expand Sidebar |
+
+---
+
+## 🛡️ Built for Safety & Privacy
+
+* **Hardcoded System Safety Shield** — Ferrowipe blocks deletion of critical Windows directories (`C:\Windows`, root drives, core system paths) at the backend level.
+* **Protected Personal & Browser Data** — Hard backend guards ensure passwords, cookies, bookmarks, browsing history, logins, sessions, extensions, app settings, and personal folders are never touched during junk cleaning.
+* **Recycle Bin First** — Space Analyzer deletions go to the Windows Recycle Bin by default so mistakes are recoverable.
+* **Graceful Locked-File Handling** — Files currently in use by Windows or open apps are cleanly skipped without errors or crashes.
+* **Zero Telemetry** — Everything runs locally on your machine. Ferrowipe never sends your file paths or usage data anywhere.
+
+---
+
+## 🛠️ For Developers
+
+<details>
+<summary><strong>⚡ Performance Architecture & Tech Stack</strong></summary>
+
+Ferrowipe pairs a **Rust** native backend with **Tauri 2** and **React + TypeScript + Tailwind CSS** for instant startup and minimal memory overhead:
+
+| Area | Typical Electron / WMI Cleaners | Ferrowipe (Rust + Tauri 2) |
+| :--- | :--- | :--- |
+| **Drive & SSD/HDD Detection** | Slow WMI queries (1.5–3s) | Direct Win32 `IOCTL_STORAGE_QUERY_PROPERTY` (< 0.1ms) |
+| **Disk Indexing & Traversal** | Single-threaded synchronous I/O | Parallel Win32 traversal + live `ReadDirectoryChangesW` sync |
+| **Recycle Bin Management** | Manual folder recursion | Native Windows Shell API (`SHQueryRecycleBinW` / `SHEmptyRecycleBinW`) |
+| **Memory Footprint** | ~150–400 MB (Chromium runtime) | ~30–50 MB (Windows native WebView2) |
+
+</details>
+
+<details>
+<summary><strong>🔧 Build from Source (Windows)</strong></summary>
 
 ### Prerequisites
-1. **Rust Stable**: `rustup default stable-x86_64-pc-windows-msvc`
-2. **Microsoft C++ Build Tools**: Visual Studio 2019/2022/2026 Build Tools with the C++ workload.
-3. **Node.js**: Node 18+ and `npm`.
-4. **WebView2**: Built into Windows 10/11.
+1. **Rust (Stable)**: `rustup default stable-x86_64-pc-windows-msvc`
+2. **Visual Studio Build Tools**: C++ desktop development workload
+3. **Node.js**: v18+ with `npm`
+4. **WebView2**: Pre-installed on Windows 10 & 11
 
-### Quick Start (Development)
+### Run in Development Mode
 ```powershell
-# Clone the repository
 git clone https://github.com/dhruvb2007/Ferrowipe.git
 cd Ferrowipe
-
-# Install frontend dependencies
 npm install
-
-# Run in development mode with hot-reload
 npm run tauri dev
 ```
 
-### Production Build
+### Build Production Release (Installers + Portable `.exe`)
 ```powershell
-# Compiles optimized production binary and Windows installer
 npm run tauri build
 ```
-The compiled executable will be located at:
-`src-tauri/target/release/ferrowipe.exe`
+Outputs are generated at:
+* Portable binary: `src-tauri/target/release/ferrowipe.exe`
+* NSIS Setup Installer: `src-tauri/target/release/bundle/nsis/Ferrowipe_1.0.0_x64-setup.exe`
+* MSI Installer: `src-tauri/target/release/bundle/msi/Ferrowipe_1.0.0_x64_en-US.msi`
+
+</details>
 
 ---
 
-## 📦 Project Structure
+## 👤 Author & License
 
-```
-Ferrowipe/
-├── app-icon.svg                 # Application Vector Brand Icon
-├── package.json                 # Frontend dependencies & scripts
-├── vite.config.ts               # Vite configuration for Tauri 2
-├── tailwind.config.js           # Tailwind CSS configuration
-├── src/                         # React + TypeScript Frontend
-│   ├── main.tsx                 # Entrypoint
-│   ├── App.tsx                  # Root state & navigation
-│   ├── types.ts                 # Shared TypeScript models
-│   ├── utils.ts                 # Byte & duration formatting
-│   └── components/
-│       ├── Header.tsx           # Branding & navigation bar
-│       ├── DriveOverview.tsx    # Drive cards, SSD/HDD badges, space warnings
-│       ├── JunkCleaner.tsx      # Target selection, scan/preview/clean workflow
-│       ├── ConfirmationModal.tsx# Deletion safety confirm dialog
-│       └── ReportModal.tsx      # Post-cleaning metrics & skipped files log
-└── src-tauri/                   # Rust Tauri 2 Backend
-    ├── Cargo.toml               # Rust dependencies (windows-sys, jwalk, rayon)
-    ├── tauri.conf.json          # Tauri application settings & windows
-    ├── build.rs                 # Tauri build script
-    └── src/
-        ├── main.rs              # Application main entrypoint
-        ├── lib.rs               # Tauri handler registrations
-        ├── models.rs            # Rust data structures (DriveInfo, JunkItem, etc.)
-        ├── drives.rs            # Win32 hardware drive detection (SSD/HDD)
-        ├── rules.rs             # Rule definitions & path resolution
-        ├── cleaner.rs           # Multithreaded scan & safe delete engines
-        └── commands.rs          # Invokable IPC commands & cancel tokens
-```
+Created by **Dhruv Prajapati** ([@dhruvb2007](https://github.com/dhruvb2007)).
 
----
+Ferrowipe is open-source software licensed under the **[MIT License](./LICENSE)**.
 
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
+<p align="center">
+  If Ferrowipe helped free up your drive, consider giving the repository a ⭐ on GitHub!
+</p>

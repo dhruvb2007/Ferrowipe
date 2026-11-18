@@ -47,14 +47,25 @@ pub struct FolderAnalysisResult {
     pub items: Vec<FolderItem>,
     pub duration_ms: u64,
     pub is_full_disk: bool,
+    pub from_cache: bool,
+    pub is_watching: bool,
+    pub is_syncing: bool,
+    pub revision: u64,
+    pub last_sync_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzeProgress {
     pub current_folder: String,
+    pub drive_root: String,
     pub folders_scanned: u64,
     pub files_scanned: u64,
     pub bytes_scanned: u64,
+    pub items_per_sec: u64,
+    pub folders_per_sec: u64,
+    pub files_per_sec: u64,
+    pub bytes_per_sec: u64,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +147,20 @@ pub fn compute_directory_metrics(
     let mut subfolder_count = 0u64;
     let mut is_denied = false;
 
-    for entry_res in jwalk::WalkDir::new(dir).skip_hidden(false).follow_links(false) {
+    let walker = jwalk::WalkDir::new(dir)
+        .skip_hidden(false)
+        .follow_links(false)
+        .process_read_dir(|_depth, _path, _state, children| {
+            for child_res in children.iter_mut() {
+                if let Ok(entry) = child_res {
+                    if entry.file_type.is_dir() && is_junction_or_symlink(&entry.path()) {
+                        entry.read_children_path = None;
+                    }
+                }
+            }
+        });
+
+    for entry_res in walker {
         if cancel_flag.load(Ordering::Relaxed) {
             break;
         }
@@ -245,9 +269,15 @@ pub fn analyze_directory(
                         "analyze:progress",
                         AnalyzeProgress {
                             current_folder: name.clone(),
+                            drive_root: target_path.to_string_lossy().to_string(),
                             folders_scanned: total_scanned_dirs.load(Ordering::Relaxed),
                             files_scanned: total_files_clone.load(Ordering::Relaxed),
                             bytes_scanned: total_bytes_clone.load(Ordering::Relaxed),
+                            items_per_sec: 0,
+                            folders_per_sec: 0,
+                            files_per_sec: 0,
+                            bytes_per_sec: 0,
+                            elapsed_ms: start_time.elapsed().as_millis() as u64,
                         },
                     );
                 }
@@ -336,9 +366,15 @@ pub fn analyze_directory(
         "analyze:progress",
         AnalyzeProgress {
             current_folder: "Analysis Complete".to_string(),
+            drive_root: target_path.to_string_lossy().to_string(),
             folders_scanned: total_scanned_dirs.load(Ordering::Relaxed),
             files_scanned: total_scanned_files.load(Ordering::Relaxed),
             bytes_scanned: overall_bytes,
+            items_per_sec: 0,
+            folders_per_sec: 0,
+            files_per_sec: 0,
+            bytes_per_sec: 0,
+            elapsed_ms: start_time.elapsed().as_millis() as u64,
         },
     );
 
@@ -350,6 +386,11 @@ pub fn analyze_directory(
         items: folder_items,
         duration_ms: start_time.elapsed().as_millis() as u64,
         is_full_disk: false,
+        from_cache: false,
+        is_watching: false,
+        is_syncing: false,
+        revision: 0,
+        last_sync_summary: None,
     })
 }
 
@@ -517,9 +558,15 @@ pub fn analyze_full_disk_tree(
                                     .file_name()
                                     .map(|n| n.to_string_lossy().to_string())
                                     .unwrap_or_default(),
+                                drive_root: disk_root_str.to_string(),
                                 folders_scanned: scanned_folders.load(Ordering::Relaxed),
                                 files_scanned: scanned_files.load(Ordering::Relaxed),
                                 bytes_scanned: scanned_bytes.load(Ordering::Relaxed),
+                                items_per_sec: 0,
+                                folders_per_sec: 0,
+                                files_per_sec: 0,
+                                bytes_per_sec: 0,
+                                elapsed_ms: start_time.elapsed().as_millis() as u64,
                             },
                         );
                     }
@@ -643,9 +690,15 @@ pub fn analyze_full_disk_tree(
         "analyze:progress",
         AnalyzeProgress {
             current_folder: "Full Disk Scan Completed".to_string(),
+            drive_root: disk_root_str.to_string(),
             folders_scanned: root_total_folders,
             files_scanned: root_total_files,
             bytes_scanned: root_total_bytes,
+            items_per_sec: 0,
+            folders_per_sec: 0,
+            files_per_sec: 0,
+            bytes_per_sec: 0,
+            elapsed_ms: start_time.elapsed().as_millis() as u64,
         },
     );
 
@@ -657,6 +710,11 @@ pub fn analyze_full_disk_tree(
         items: root_items,
         duration_ms: start_time.elapsed().as_millis() as u64,
         is_full_disk: true,
+        from_cache: false,
+        is_watching: false,
+        is_syncing: false,
+        revision: 1,
+        last_sync_summary: None,
     })
 }
 
@@ -762,9 +820,15 @@ pub fn scan_deep_largest_folders(
                                 .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default(),
+                            drive_root: target_path_str.to_string(),
                             folders_scanned: scanned_clone.load(Ordering::Relaxed),
                             files_scanned: files,
                             bytes_scanned: size,
+                            items_per_sec: 0,
+                            folders_per_sec: 0,
+                            files_per_sec: 0,
+                            bytes_per_sec: 0,
+                            elapsed_ms: 0,
                         },
                     );
                 }

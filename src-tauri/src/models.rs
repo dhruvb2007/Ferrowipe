@@ -69,6 +69,7 @@ pub struct SkippedFile {
 pub struct CleanReport {
     pub freed_bytes: u64,
     pub removed_files: u64,
+    pub deleted_paths: Vec<String>,
     pub skipped_files: Vec<SkippedFile>,
     pub duration_ms: u64,
 }
@@ -77,4 +78,67 @@ pub struct CleanReport {
 pub struct CleanRequest {
     pub selected_category_ids: Vec<String>,
     pub selected_item_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedCleanupRule {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub group: String,
+    pub icon_key: String,
+    pub detected_paths: Vec<String>,
+    pub profile_count: usize,
+    pub is_recycle_bin: bool,
+    pub safe_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartupSyncProgress {
+    pub is_active: bool,
+    pub current_drive: String,
+    pub current_index: usize,
+    pub total_drives: usize,
+    pub completed_drives: Vec<String>,
+    pub stage: String,
+    pub message: String,
+    pub items_per_sec: u64,
+    pub folders_scanned: u64,
+    pub files_scanned: u64,
+    pub bytes_scanned: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoftwarePathEntry {
+    pub label: String,
+    pub kind: String, // "install" | "data" | "cache"
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledSoftwareItem {
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    pub version: String,
+    pub category: String,
+    pub drive: String,
+    pub install_bytes: u64,
+    pub data_bytes: u64,
+    pub total_bytes: u64,
+    pub primary_path: String,
+    pub paths: Vec<SoftwarePathEntry>,
+    pub size_source: String, // "exact_disk" | "registry_estimate"
+    pub install_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoftwareStorageReport {
+    pub apps: Vec<InstalledSoftwareItem>,
+    pub total_bytes: u64,
+    pub total_install_bytes: u64,
+    pub total_data_bytes: u64,
+    pub app_count: usize,
+    pub duration_ms: u64,
 }

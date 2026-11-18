@@ -1,20 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Trash2, AlertTriangle, ShieldAlert, RotateCcw } from 'lucide-react';
+import { Trash2, AlertTriangle, ShieldAlert, RotateCcw, Copy, Check } from 'lucide-react';
 import { FolderItem } from '@/types';
 import { formatBytes } from '@/utils';
+import { cn } from '@/lib/utils';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
+  ObsidianBadge,
+  ObsidianButton,
+  ObsidianModal,
+  ObsidianSwitch,
+} from '@/components/obsidian/ObsidianPrimitives';
+import { obsidianToast } from '@/components/obsidian/ObsidianToast';
 
 interface FolderDeleteModalProps {
   isOpen: boolean;
@@ -30,141 +25,181 @@ export const FolderDeleteModal: React.FC<FolderDeleteModalProps> = ({
   selectedFolders,
 }) => {
   const [permanent, setPermanent] = useState(false);
+  const [copiedAll, setCopiedAll] = useState(false);
 
-  // Always reset to Safe Mode when opening modal
   useEffect(() => {
     if (isOpen) {
       setPermanent(false);
+      setCopiedAll(false);
     }
   }, [isOpen]);
 
   const totalBytes = selectedFolders.reduce((sum, f) => sum + f.size_bytes, 0);
 
+  const handleCopyAllPaths = () => {
+    const text = selectedFolders.map((f) => f.path).join('\n');
+    navigator.clipboard.writeText(text);
+    setCopiedAll(true);
+    obsidianToast.success(
+      `Copied ${selectedFolders.length} deleting path${selectedFolders.length === 1 ? '' : 's'}`
+    );
+    window.setTimeout(() => setCopiedAll(false), 2000);
+  };
+
+  const handleCopySinglePath = (path: string) => {
+    navigator.clipboard.writeText(path);
+    obsidianToast.success('Path copied to clipboard', { description: path });
+  };
+
   return (
-    <Dialog open={isOpen && selectedFolders.length > 0} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-destructive/15 text-destructive border border-destructive/25">
-              <Trash2 className="h-5 w-5" />
-            </div>
-            <div>
-              <DialogTitle>Delete Selected Items</DialogTitle>
-              <DialogDescription>
-                Free up disk space by removing selected folders or files
-              </DialogDescription>
-            </div>
+    <ObsidianModal
+      open={isOpen && selectedFolders.length > 0}
+      onClose={onClose}
+      maxWidthClass="max-w-lg"
+      title="Delete Selected Items"
+      description="Free up disk space by removing selected folders or files"
+      icon={
+        <div className="h-9 w-9 rounded-xl bg-[var(--obs-danger-soft)] border border-[var(--obs-danger)]/25 text-[var(--obs-danger)] flex items-center justify-center shrink-0">
+          <Trash2 className="h-4 w-4" />
+        </div>
+      }
+      footer={
+        <div className="flex items-center justify-between w-full gap-2">
+          <ObsidianButton variant="control" size="sm" onClick={handleCopyAllPaths}>
+            {copiedAll ? (
+              <Check className="h-3.5 w-3.5 text-[var(--obs-success)]" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            {copiedAll ? 'Copied Paths!' : `Copy Paths (${selectedFolders.length})`}
+          </ObsidianButton>
+          <div className="flex items-center gap-2">
+            <ObsidianButton variant="ghost" onClick={onClose}>
+              Cancel
+            </ObsidianButton>
+            <ObsidianButton variant="danger" onClick={() => onConfirm(permanent)}>
+              <Trash2 className="h-3.5 w-3.5" />
+              {permanent ? 'Permanently Delete' : 'Move to Recycle Bin'}
+            </ObsidianButton>
           </div>
-        </DialogHeader>
-
-        <div className="space-y-4 py-1">
-          {/* Space Reclaim Summary */}
-          <div className="rounded-xl border bg-muted/40 p-4 text-center space-y-1">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Space to be Reclaimed
-            </p>
-            <div className="text-3xl font-bold tracking-tight text-destructive tabular-nums">
-              {formatBytes(totalBytes)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Across {selectedFolders.length} selected item{selectedFolders.length === 1 ? '' : 's'}
-            </p>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {/* Reclaim Summary */}
+        <div className="rounded-xl border border-[var(--obs-border)] bg-[var(--obs-bg)]/70 p-4 text-center space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--obs-text-muted)]">
+            Space to be Reclaimed
+          </p>
+          <div className="text-3xl font-bold tracking-tight text-[var(--obs-danger)] tabular-nums">
+            {formatBytes(totalBytes)}
           </div>
-
-          {/* Selected Folders List */}
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">Selected Paths</p>
-            <ScrollArea className="max-h-36 rounded-lg border bg-muted/20 p-2">
-              <div className="space-y-1.5">
-                {selectedFolders.map((f) => (
-                  <div
-                    key={f.id}
-                    className="flex items-center justify-between gap-3 rounded-md border bg-card/60 px-3 py-2 text-xs"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-foreground truncate">{f.name}</p>
-                      <p className="text-[10px] text-muted-foreground font-mono truncate">
-                        {f.path}
-                      </p>
-                    </div>
-                    <Badge variant="secondary" className="font-mono tabular-nums shrink-0">
-                      {formatBytes(f.size_bytes)}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
-
-          {/* Deletion Mode Selector */}
-          <div
-            className={`rounded-xl border p-3.5 transition-colors space-y-2 ${
-              permanent
-                ? 'border-destructive/40 bg-destructive/5'
-                : 'border-border bg-muted/30'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <label
-                  htmlFor="permanent-delete-switch"
-                  className="text-xs font-semibold text-foreground cursor-pointer"
-                >
-                  Permanent Deletion (Bypass Recycle Bin)
-                </label>
-                <p className="text-[11px] text-muted-foreground">
-                  {permanent
-                    ? 'Items will be permanently erased and cannot be restored.'
-                    : 'Safe Mode: Items are moved to the Windows Recycle Bin.'}
-                </p>
-              </div>
-              <Switch
-                id="permanent-delete-switch"
-                checked={permanent}
-                onCheckedChange={setPermanent}
-              />
-            </div>
-
-            <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
-              {permanent ? (
-                <span className="text-destructive flex items-center gap-1.5 font-medium">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  Irreversible action — double-check paths above before continuing.
-                </span>
-              ) : (
-                <span className="text-primary flex items-center gap-1.5 font-medium">
-                  <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-                  Recoverable from Windows Recycle Bin if deleted by mistake.
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Safety Shield Note */}
-          <Alert className="bg-muted/20">
-            <ShieldAlert className="h-4 w-4 text-primary" />
-            <AlertTitle className="text-xs font-semibold">Built-in Safety Shield</AlertTitle>
-            <AlertDescription className="text-xs text-muted-foreground">
-              Critical Windows directories (such as <code className="font-mono">C:\Windows</code>{' '}
-              and root partitions) are automatically protected against deletion.
-            </AlertDescription>
-          </Alert>
+          <p className="text-xs text-[var(--obs-text-muted)]">
+            Across {selectedFolders.length} selected item{selectedFolders.length === 1 ? '' : 's'}
+          </p>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-2">
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => onConfirm(permanent)}
-            className="gap-1.5"
-          >
-            <Trash2 className="h-4 w-4" />
-            {permanent ? 'Permanently Delete' : 'Move to Recycle Bin'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        {/* Selected Paths with Copy Support */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-medium text-[var(--obs-text-muted)]">
+              Paths to Delete ({selectedFolders.length})
+            </p>
+            <button
+              type="button"
+              onClick={handleCopyAllPaths}
+              className="text-[11px] font-medium text-[var(--obs-accent)] hover:underline inline-flex items-center gap-1"
+            >
+              <Copy className="h-3 w-3" />
+              Copy all
+            </button>
+          </div>
+          <div className="max-h-36 overflow-y-auto obs-scroll rounded-xl border border-[var(--obs-border)] bg-[var(--obs-bg)]/50 p-2 space-y-1.5">
+            {selectedFolders.map((f) => (
+              <div
+                key={f.id}
+                className="flex items-center justify-between gap-2.5 rounded-lg border border-[var(--obs-border)] bg-[var(--obs-panel)] px-3 py-2 text-xs group"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-[var(--obs-fg)] truncate">{f.name}</p>
+                  <p className="text-[10px] text-[var(--obs-text-subtle)] font-mono truncate">
+                    {f.path}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <ObsidianBadge tone="neutral" className="font-mono tabular-nums">
+                    {formatBytes(f.size_bytes)}
+                  </ObsidianBadge>
+                  <ObsidianButton
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => handleCopySinglePath(f.path)}
+                    title="Copy this path"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </ObsidianButton>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Deletion Mode Selector */}
+        <div
+          className={cn(
+            'rounded-xl border p-3.5 transition-colors space-y-2',
+            permanent
+              ? 'border-[var(--obs-danger)]/40 bg-[var(--obs-danger-soft)]'
+              : 'border-[var(--obs-border)] bg-[var(--obs-bg)]/50'
+          )}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <label
+                htmlFor="obs-permanent-switch"
+                className="text-xs font-semibold text-[var(--obs-fg)] cursor-pointer"
+              >
+                Permanent Deletion (Bypass Recycle Bin)
+              </label>
+              <p className="text-[11px] text-[var(--obs-text-muted)]">
+                {permanent
+                  ? 'Items will be permanently erased and cannot be recovered.'
+                  : 'Safe Mode: Items are moved to the Windows Recycle Bin.'}
+              </p>
+            </div>
+            <ObsidianSwitch
+              id="obs-permanent-switch"
+              checked={permanent}
+              onChange={setPermanent}
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 text-[11px] pt-0.5">
+            {permanent ? (
+              <span className="text-[var(--obs-danger)] flex items-center gap-1.5 font-medium">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Irreversible action — verify paths before confirming.
+              </span>
+            ) : (
+              <span className="text-[var(--obs-success)] flex items-center gap-1.5 font-medium">
+                <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+                Recoverable from Windows Recycle Bin if needed.
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Built-in Safety Shield */}
+        <div className="rounded-xl border border-[var(--obs-border)] bg-[var(--obs-bg)]/45 p-3 flex items-start gap-2.5 text-xs">
+          <ShieldAlert className="h-4 w-4 text-[var(--obs-accent)] shrink-0 mt-0.5" />
+          <p className="text-[11px] text-[var(--obs-text-muted)] leading-relaxed">
+            <strong className="text-[var(--obs-fg)]">Safety Shield:</strong> Critical Windows
+            directories (such as <code className="font-mono">C:\Windows</code> and root partitions)
+            are automatically protected.
+          </p>
+        </div>
+      </div>
+    </ObsidianModal>
   );
 };

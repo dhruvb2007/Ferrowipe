@@ -2,94 +2,272 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --background: 0 0% 98%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 158 64% 38%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 94%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 94.5%;
-    --muted-foreground: 240 3.8% 44%;
-    --accent: 240 4.8% 93.5%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 89%;
-    --input: 240 5.9% 89%;
-    --ring: 158 64% 38%;
-    --radius: 0.65rem;
-    --sidebar-background: 0 0% 96.5%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 158 64% 38%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 91.5%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 240 5.9% 89%;
-  }
+/* ============================================================================
+   ObsidianUI Design System (obsidianui.dev) — Tuned for Ferrowipe
+   Tactile obsidian monochrome surfaces + Ferro Orange (#f97316) brand accents
+   ============================================================================ */
 
-  .dark {
-    --background: 240 10% 4.5%;
-    --foreground: 0 0% 96%;
-    --card: 240 8% 7.2%;
-    --card-foreground: 0 0% 96%;
-    --popover: 240 8% 7.5%;
-    --popover-foreground: 0 0% 96%;
-    --primary: 158 64% 46%;
-    --primary-foreground: 158 80% 6%;
-    --secondary: 240 6% 13%;
-    --secondary-foreground: 0 0% 95%;
-    --muted: 240 6% 12%;
-    --muted-foreground: 240 5% 60%;
-    --accent: 240 6% 14.5%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 52%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 6% 15.5%;
-    --input: 240 6% 15.5%;
-    --ring: 158 64% 46%;
-    --sidebar-background: 240 10% 5.6%;
-    --sidebar-foreground: 240 5% 84%;
-    --sidebar-primary: 158 64% 46%;
-    --sidebar-primary-foreground: 158 80% 6%;
-    --sidebar-accent: 240 6% 13%;
-    --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 240 6% 13.5%;
-  }
+:root {
+  --obs-bg: #f8f8f8;
+  --obs-sidebar: #f3f3f3;
+  --obs-panel: #ffffff;
+  --obs-control: #ffffff;
+  --obs-muted: #efefef;
+  --obs-muted-hover: #e5e5e5;
+  --obs-border: #e6e6e6;
+  --obs-border-strong: #d4d4d4;
+  --obs-fg: #141414;
+  --obs-text-muted: #5c5c5c;
+  --obs-text-subtle: #787878;
+  --obs-hover: rgb(0 0 0 / 0.045);
+
+  /* Ferro Orange brand accent (matches /Ferrowipe_LOGO.png) */
+  --obs-accent: #ea580c;
+  --obs-accent-hover: #f97316;
+  --obs-accent-soft: rgb(234 88 12 / 0.1);
+  --obs-accent-border: rgb(234 88 12 / 0.28);
+  --obs-accent-fg: #ffffff;
+
+  /* Status tones (ObsidianUI status-bars / active-sessions palette) */
+  --obs-success: #16a34a;
+  --obs-success-soft: rgb(22 163 74 / 0.11);
+  --obs-warning: #d97706;
+  --obs-warning-soft: rgb(217 119 6 / 0.12);
+  --obs-danger: #dc2626;
+  --obs-danger-hover: #b91c1c;
+  --obs-danger-soft: rgb(220 38 38 / 0.1);
+
+  /* Tactile ObsidianUI shadows */
+  --obs-card-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 0 0 1px var(--obs-border);
+  --obs-control-shadow: 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 2px rgb(0 0 0 / 0.05);
+  --obs-accent-shadow:
+    0 2px 6px rgb(234 88 12 / 0.28),
+    0 0 0 1px #c2410c,
+    inset 0 3px 5px rgb(255 255 255 / 0.22),
+    inset 0 0 0 1px rgb(255 255 255 / 0.16),
+    inset 0 -6px 12px rgb(0 0 0 / 0.14);
+  --obs-danger-shadow:
+    0 2px 6px rgb(220 38 38 / 0.24),
+    0 0 0 1px #b91c1c,
+    inset 0 3px 5px rgb(255 255 255 / 0.18),
+    inset 0 -6px 12px rgb(0 0 0 / 0.16);
+  --obs-menu: rgb(255 255 255 / 0.86);
+  --obs-menu-highlight: rgb(0 0 0 / 0.055);
+  --obs-menu-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.08),
+    0 4px 12px rgb(0 0 0 / 0.06),
+    0 18px 40px -8px rgb(0 0 0 / 0.16);
+
+  /* Discover Button tokens */
+  --obs-discover-surface: rgb(238 238 238 / 0.94);
+  --obs-discover-text: #161616;
+  --obs-discover-fill: #ea580c;
+  --obs-discover-active-text: #ffffff;
+}
+
+.dark {
+  --obs-bg: #111111;
+  --obs-sidebar: #141414;
+  --obs-panel: #181818;
+  --obs-control: #1f1f1f;
+  --obs-muted: #262626;
+  --obs-muted-hover: #303030;
+  --obs-border: #242424;
+  --obs-border-strong: #383838;
+  --obs-fg: #f7f8fa;
+  --obs-text-muted: #9a9a9a;
+  --obs-text-subtle: #737373;
+  --obs-hover: rgb(255 255 255 / 0.045);
+
+  --obs-accent: #f97316;
+  --obs-accent-hover: #fb923c;
+  --obs-accent-soft: rgb(249 115 22 / 0.13);
+  --obs-accent-border: rgb(249 115 22 / 0.32);
+  --obs-accent-fg: #ffffff;
+
+  --obs-success: #22c55e;
+  --obs-success-soft: rgb(34 197 94 / 0.12);
+  --obs-warning: #fbbf24;
+  --obs-warning-soft: rgb(251 191 36 / 0.12);
+  --obs-danger: #ef4444;
+  --obs-danger-hover: #dc2626;
+  --obs-danger-soft: rgb(239 68 68 / 0.14);
+
+  --obs-card-shadow:
+    0 0 0 1px var(--obs-border),
+    inset 0 1px 0 rgb(255 255 255 / 0.045);
+  --obs-control-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.45),
+    inset 0 1px 0 rgb(255 255 255 / 0.09),
+    inset 0 0 0 1px rgb(255 255 255 / 0.055);
+  --obs-accent-shadow:
+    0 4px 12px rgb(249 115 22 / 0.22),
+    0 0 0 1px #0d0d0d,
+    inset 0 4px 6px rgb(255 255 255 / 0.22),
+    inset 0 0 0 1px rgb(255 255 255 / 0.16),
+    inset 0 -8px 14px rgb(0 0 0 / 0.22);
+  --obs-danger-shadow:
+    0 4px 12px rgb(239 68 68 / 0.2),
+    0 0 0 1px #0d0d0d,
+    inset 0 4px 6px rgb(255 255 255 / 0.18),
+    inset 0 0 0 1px rgb(255 255 255 / 0.12),
+    inset 0 -8px 14px rgb(0 0 0 / 0.22);
+  --obs-menu: rgb(26 26 26 / 0.84);
+  --obs-menu-highlight: rgb(255 255 255 / 0.07);
+  --obs-menu-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.09),
+    inset 0 0 0 1px rgb(255 255 255 / 0.05),
+    0 20px 44px -10px rgb(0 0 0 / 0.65);
+
+  --obs-discover-surface: rgb(32 32 32 / 0.92);
+  --obs-discover-text: #f7f8fa;
+  --obs-discover-fill: #f97316;
+  --obs-discover-active-text: #ffffff;
 }
 
 @layer base {
   * {
-    @apply border-border;
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+    border-color: var(--obs-border);
   }
 
   body {
-    @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    background-color: var(--obs-bg);
+    color: var(--obs-fg);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+}
 
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
+/* ObsidianUI hover-reveal minimal scrollbars */
+.obs-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
+.obs-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
 
-  ::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.22);
-    border-radius: 9999px;
-  }
+.obs-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.4);
-  }
+.obs-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+.obs-scroll:hover::-webkit-scrollbar-thumb,
+.obs-scroll:focus-within::-webkit-scrollbar-thumb {
+  background: var(--obs-border-strong);
+}
+
+/* ObsidianUI Tactile Utility Classes */
+.obs-card {
+  background: var(--obs-panel);
+  box-shadow: var(--obs-card-shadow);
+  border-radius: 14px;
+}
+
+.obs-control {
+  background: var(--obs-control);
+  box-shadow: var(--obs-control-shadow);
+}
+
+.obs-accent-btn {
+  background: linear-gradient(180deg, var(--obs-accent-hover) 0%, var(--obs-accent) 100%);
+  color: var(--obs-accent-fg);
+  box-shadow: var(--obs-accent-shadow);
+}
+
+.obs-accent-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.obs-danger-btn {
+  background: linear-gradient(180deg, #f05252 0%, var(--obs-danger) 100%);
+  color: #ffffff;
+  box-shadow: var(--obs-danger-shadow);
+}
+
+.obs-danger-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.obs-menu {
+  background: var(--obs-menu);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--obs-menu-shadow);
+}
+
+/* ObsidianUI Discover Button (from obsidianui.dev/r/discover-button.json) */
+.obs-discover-btn {
+  position: relative;
+  display: inline-flex;
+  height: 44px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--obs-border-strong);
+  border-radius: 999px;
+  background: var(--obs-discover-surface);
+  backdrop-filter: blur(10px);
+  color: var(--obs-discover-text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0;
+  transition: border-color 240ms ease;
+}
+
+.obs-discover-btn:hover {
+  border-color: var(--obs-accent);
+}
+
+.obs-discover-btn__fill {
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: 38px;
+  border-radius: inherit;
+  background: var(--obs-discover-fill);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+  transition: width 420ms cubic-bezier(0.65, 0, 0.076, 1);
+}
+
+.obs-discover-btn__icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  place-items: center;
+  color: var(--obs-discover-active-text);
+  transition: transform 420ms cubic-bezier(0.65, 0, 0.076, 1);
+}
+
+.obs-discover-btn__text {
+  position: relative;
+  z-index: 1;
+  padding: 0 20px 0 8px;
+  transition: color 280ms ease;
+}
+
+.obs-discover-btn:hover .obs-discover-btn__fill,
+.obs-discover-btn:focus-visible .obs-discover-btn__fill {
+  width: calc(100% - 4px);
+}
+
+.obs-discover-btn:hover .obs-discover-btn__icon,
+.obs-discover-btn:focus-visible .obs-discover-btn__icon {
+  transform: translateX(4px);
+}
+
+.obs-discover-btn:hover .obs-discover-btn__text,
+.obs-discover-btn:focus-visible .obs-discover-btn__text {
+  color: var(--obs-discover-active-text);
 }

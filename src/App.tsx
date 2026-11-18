@@ -1,30 +1,33 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { toast } from 'sonner';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import {
   AnalyzerNavigationRequest,
   CleanerQuickTrigger,
   CleanerStatusSummary,
+  DetectedCleanupRule,
   DriveInfo,
   NavTab,
   RecycleBinStat,
+  StartupSyncProgress,
 } from '@/types';
 import { Sidebar } from '@/components/Sidebar';
 import { Header } from '@/components/Header';
 import { DriveOverview } from '@/components/DriveOverview';
 import { JunkCleaner } from '@/components/JunkCleaner';
 import { FolderAnalyzer } from '@/components/FolderAnalyzer';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toaster } from '@/components/ui/sonner';
+import { SoftwareStorage } from '@/components/SoftwareStorage';
+import { ObsidianToaster, obsidianToast } from '@/components/obsidian/ObsidianToast';
 import { cn } from '@/lib/utils';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [recycleBins, setRecycleBins] = useState<RecycleBinStat[]>([]);
+  const [detectedRules, setDetectedRules] = useState<DetectedCleanupRule[]>([]);
+  const [startupSync, setStartupSync] = useState<StartupSyncProgress | null>(null);
   const [isLoadingDrives, setIsLoadingDrives] = useState(false);
 
-  // Sidebar & Theme preferences
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('ferrowipe:sidebar-collapsed') === 'true';
@@ -41,7 +44,6 @@ export const App: React.FC = () => {
     }
   });
 
-  // Cross-view triggers & live statuses
   const [analyzerNavRequest, setAnalyzerNavRequest] =
     useState<AnalyzerNavigationRequest | null>(null);
   const [cleanerTrigger, setCleanerTrigger] = useState<CleanerQuickTrigger | null>(null);
@@ -54,14 +56,12 @@ export const App: React.FC = () => {
   const [activeAnalyzerPath, setActiveAnalyzerPath] = useState<string>('C:\\');
   const [isAnalyzerBusy, setIsAnalyzerBusy] = useState(false);
 
-  // Apply theme class to <html>
+  const startupTriggeredRef = useRef(false);
+
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
     try {
       localStorage.setItem('ferrowipe:theme', theme);
     } catch {
@@ -69,7 +69,6 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
-  // Persist sidebar state
   const handleToggleSidebar = useCallback(() => {
     setSidebarCollapsed((prev) => {
       const next = !prev;
@@ -82,23 +81,39 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Fetch drives & recycle bin info
+  const fetchDetectedRules = useCallback(async () => {
+    try {
+      const rules = await invoke<DetectedCleanupRule[]>('get_available_cleanup_rules');
+      setDetectedRules(rules);
+    } catch (err) {
+      console.error('Failed to detect installed cleanup targets:', err);
+    }
+  }, []);
+
   const fetchSystemOverview = useCallback(async (showToast = false) => {
     setIsLoadingDrives(true);
     try {
-      const [driveData, binData] = await Promise.all([
+      const [driveData, binData, rulesData] = await Promise.all([
         invoke<DriveInfo[]>('get_drives'),
         invoke<RecycleBinStat[]>('query_all_recycle_bins').catch(() => [] as RecycleBinStat[]),
+        invoke<DetectedCleanupRule[]>('get_available_cleanup_rules').catch(
+          () => [] as DetectedCleanupRule[]
+        ),
       ]);
       setDrives(driveData);
       setRecycleBins(binData);
+      if (rulesData.length > 0) {
+        setDetectedRules(rulesData);
+      }
       if (showToast) {
-        toast.success(`Refreshed ${driveData.length} storage volume${driveData.length === 1 ? '' : 's'}`);
+        obsidianToast.success(
+          `Refreshed ${driveData.length} storage volume${driveData.length === 1 ? '' : 's'}`
+        );
       }
     } catch (err) {
       console.error('Failed to load drive information:', err);
       if (showToast) {
-        toast.error('Unable to query storage volumes');
+        obsidianToast.error('Unable to query storage volumes');
       }
     } finally {
       setIsLoadingDrives(false);
@@ -109,7 +124,40 @@ export const App: React.FC = () => {
     fetchSystemOverview(false);
   }, [fetchSystemOverview]);
 
-  // Global keyboard shortcuts (Ctrl+1/2/3, Ctrl+B)
+  // Fast sequential one-by-one disk sync on first app start + real-time listeners
+  useEffect(() => {
+    let unlistenStartup: UnlistenFn | undefined;
+    let unlistenDrives: UnlistenFn | undefined;
+
+    const setup = async () => {
+      try {
+        unlistenStartup = await listen<StartupSyncProgress>('startup:sync-progress', (event) => {
+          setStartupSync(event.payload);
+        });
+
+        unlistenDrives = await listen<DriveInfo[]>('drives:updated', (event) => {
+          setDrives(event.payload);
+          invoke<RecycleBinStat[]>('query_all_recycle_bins')
+            .then(setRecycleBins)
+            .catch(() => {});
+        });
+
+        if (!startupTriggeredRef.current) {
+          startupTriggeredRef.current = true;
+          invoke<boolean>('start_initial_sync_all_drives', { force: false }).catch(() => {});
+        }
+      } catch {
+        // Non-Tauri browser preview
+      }
+    };
+
+    setup();
+    return () => {
+      if (unlistenStartup) unlistenStartup();
+      if (unlistenDrives) unlistenDrives();
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -122,6 +170,9 @@ export const App: React.FC = () => {
       } else if (e.key === '3') {
         e.preventDefault();
         setCurrentTab('analyzer');
+      } else if (e.key === '4') {
+        e.preventDefault();
+        setCurrentTab('apps');
       } else if (e.key.toLowerCase() === 'b') {
         e.preventDefault();
         handleToggleSidebar();
@@ -131,7 +182,6 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleToggleSidebar]);
 
-  // Cross-tab convenience navigation handlers
   const handleQuickClean = useCallback((presetRuleIds?: string[]) => {
     setCurrentTab('cleaner');
     setCleanerTrigger({
@@ -160,88 +210,101 @@ export const App: React.FC = () => {
   );
 
   return (
-    <TooltipProvider delayDuration={250}>
-      <div className="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans">
-        {/* Collapsible Desktop Navigation Sidebar */}
-        <Sidebar
+    <div className="flex h-screen w-screen bg-[var(--obs-bg)] text-[var(--obs-fg)] overflow-hidden font-sans">
+      <Sidebar
+        currentTab={currentTab}
+        onSelectTab={setCurrentTab}
+        drives={drives}
+        activeAnalyzerDrive={activeAnalyzerPath}
+        onSelectDriveForAnalyzer={(mountPoint) =>
+          handleNavigateToAnalyzer(mountPoint, { mode: 'tree' })
+        }
+        cleanerStatus={cleanerStatus}
+        isAnalyzerBusy={isAnalyzerBusy}
+        startupSync={startupSync}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={handleToggleSidebar}
+        theme={theme}
+        onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+      />
+
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        <Header
           currentTab={currentTab}
-          onSelectTab={setCurrentTab}
-          drives={drives}
-          activeAnalyzerDrive={activeAnalyzerPath}
-          onSelectDriveForAnalyzer={(mountPoint) =>
-            handleNavigateToAnalyzer(mountPoint, { mode: 'tree' })
-          }
-          cleanerStatus={cleanerStatus}
-          isAnalyzerBusy={isAnalyzerBusy}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={handleToggleSidebar}
-          theme={theme}
-          onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+          onRefreshDrives={() => fetchSystemOverview(true)}
+          onQuickJunkScan={() => handleQuickClean()}
+          isRefreshing={isLoadingDrives}
+          driveCount={drives.length}
+          startupSync={startupSync}
         />
 
-        {/* Right Application Shell */}
-        <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-          <Header
-            currentTab={currentTab}
-            onRefreshDrives={() => fetchSystemOverview(true)}
-            onQuickJunkScan={() => handleQuickClean()}
-            isRefreshing={isLoadingDrives}
-            driveCount={drives.length}
-          />
+        <main className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+          <div
+            className={cn(
+              'flex-1 min-h-0 flex flex-col overflow-hidden',
+              currentTab !== 'dashboard' && 'hidden'
+            )}
+          >
+            <DriveOverview
+              drives={drives}
+              recycleBins={recycleBins}
+              detectedRules={detectedRules}
+              isLoading={isLoadingDrives}
+              cleanerStatus={cleanerStatus}
+              onQuickClean={handleQuickClean}
+              onNavigateToCleaner={() => setCurrentTab('cleaner')}
+              onNavigateToApps={() => setCurrentTab('apps')}
+              onNavigateToAnalyzer={handleNavigateToAnalyzer}
+            />
+          </div>
 
-          {/* Persistent Views Container (preserves scan & tree state across tab switches) */}
-          <main className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-            <div
-              className={cn(
-                'flex-1 min-h-0 flex flex-col overflow-hidden',
-                currentTab !== 'dashboard' && 'hidden'
-              )}
-            >
-              <DriveOverview
-                drives={drives}
-                recycleBins={recycleBins}
-                isLoading={isLoadingDrives}
-                cleanerStatus={cleanerStatus}
-                onQuickClean={handleQuickClean}
-                onNavigateToCleaner={() => setCurrentTab('cleaner')}
-                onNavigateToAnalyzer={handleNavigateToAnalyzer}
-              />
-            </div>
+          <div
+            className={cn(
+              'flex-1 min-h-0 flex flex-col overflow-hidden',
+              currentTab !== 'cleaner' && 'hidden'
+            )}
+          >
+            <JunkCleaner
+              detectedRules={detectedRules}
+              onRefreshRules={fetchDetectedRules}
+              quickTrigger={cleanerTrigger}
+              onCleanSuccess={() => fetchSystemOverview(false)}
+              onStatusChange={setCleanerStatus}
+            />
+          </div>
 
-            <div
-              className={cn(
-                'flex-1 min-h-0 flex flex-col overflow-hidden',
-                currentTab !== 'cleaner' && 'hidden'
-              )}
-            >
-              <JunkCleaner
-                quickTrigger={cleanerTrigger}
-                onCleanSuccess={() => fetchSystemOverview(false)}
-                onStatusChange={setCleanerStatus}
-              />
-            </div>
+          <div
+            className={cn(
+              'flex-1 min-h-0 flex flex-col overflow-hidden',
+              currentTab !== 'analyzer' && 'hidden'
+            )}
+          >
+            <FolderAnalyzer
+              drives={drives}
+              isActive={currentTab === 'analyzer'}
+              navRequest={analyzerNavRequest}
+              onRefreshDrives={() => fetchSystemOverview(false)}
+              onActivePathChange={setActiveAnalyzerPath}
+              onBusyChange={setIsAnalyzerBusy}
+            />
+          </div>
 
-            <div
-              className={cn(
-                'flex-1 min-h-0 flex flex-col overflow-hidden',
-                currentTab !== 'analyzer' && 'hidden'
-              )}
-            >
-              <FolderAnalyzer
-                drives={drives}
-                isActive={currentTab === 'analyzer'}
-                navRequest={analyzerNavRequest}
-                onRefreshDrives={() => fetchSystemOverview(false)}
-                onActivePathChange={setActiveAnalyzerPath}
-                onBusyChange={setIsAnalyzerBusy}
-              />
-            </div>
-          </main>
-        </div>
+          <div
+            className={cn(
+              'flex-1 min-h-0 flex flex-col overflow-hidden',
+              currentTab !== 'apps' && 'hidden'
+            )}
+          >
+            <SoftwareStorage
+              isActive={currentTab === 'apps'}
+              onInspectPath={(path) => handleNavigateToAnalyzer(path, { mode: 'tree' })}
+            />
+          </div>
+        </main>
       </div>
 
-      <Toaster theme={theme} richColors position="bottom-right" closeButton />
-    </TooltipProvider>
+      <ObsidianToaster />
+    </div>
   );
 };
 
