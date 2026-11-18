@@ -12,8 +12,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Tauri
+# Tauri / MSIX
 /src-tauri/target/
+*.msix
 
 # IDE / OS
 .idea/
